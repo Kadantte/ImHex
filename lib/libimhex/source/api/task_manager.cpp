@@ -63,7 +63,7 @@ namespace hex {
     }
 
 
-    Task::Task(UnlocalizedString unlocalizedName, u64 maxValue, bool background, std::function<void(Task &)> function)
+    Task::Task(const UnlocalizedString &unlocalizedName, u64 maxValue, bool background, std::function<void(Task &)> function)
     : m_unlocalizedName(std::move(unlocalizedName)), m_maxValue(maxValue), m_function(std::move(function)), m_background(background) { }
 
     Task::Task(hex::Task &&other) noexcept {
@@ -327,11 +327,11 @@ namespace hex {
         s_tasksFinishedCallbacks.clear();
     }
 
-    TaskHolder TaskManager::createTask(std::string name, u64 maxValue, bool background, std::function<void(Task&)> function) {
+    TaskHolder TaskManager::createTask(const UnlocalizedString &unlocalizedName, u64 maxValue, bool background, std::function<void(Task&)> function) {
         std::scoped_lock lock(s_queueMutex);
 
         // Construct new task
-        auto task = std::make_shared<Task>(std::move(name), maxValue, background, std::move(function));
+        auto task = std::make_shared<Task>(std::move(unlocalizedName), maxValue, background, std::move(function));
 
         s_tasks.emplace_back(task);
 
@@ -344,14 +344,32 @@ namespace hex {
     }
 
 
-    TaskHolder TaskManager::createTask(std::string name, u64 maxValue, std::function<void(Task &)> function) {
-        log::debug("Creating task {}", name);
-        return createTask(std::move(name), maxValue, false, std::move(function));
+    TaskHolder TaskManager::createTask(const UnlocalizedString &unlocalizedName, u64 maxValue, std::function<void(Task &)> function) {
+        log::debug("Creating task {}", unlocalizedName.get());
+        return createTask(std::move(unlocalizedName), maxValue, false, std::move(function));
     }
 
-    TaskHolder TaskManager::createBackgroundTask(std::string name, std::function<void(Task &)> function) {
-        log::debug("Creating background task {}", name);
-        return createTask(std::move(name), 0, true, std::move(function));
+    TaskHolder TaskManager::createTask(const UnlocalizedString &unlocalizedName, u64 maxValue, std::function<void()> function) {
+        log::debug("Creating task {}", unlocalizedName.get());
+        return createTask(std::move(unlocalizedName), maxValue, false,
+            [function = std::move(function)](Task&) {
+                function();
+            }
+        );
+    }
+
+    TaskHolder TaskManager::createBackgroundTask(const UnlocalizedString &unlocalizedName, std::function<void(Task &)> function) {
+        log::debug("Creating background task {}", unlocalizedName.get());
+        return createTask(std::move(unlocalizedName), 0, true, std::move(function));
+    }
+
+    TaskHolder TaskManager::createBackgroundTask(const UnlocalizedString &unlocalizedName, std::function<void()> function) {
+        log::debug("Creating background task {}", unlocalizedName.get());
+        return createTask(std::move(unlocalizedName), 0, true,
+            [function = std::move(function)](Task&) {
+                function();
+            }
+        );
     }
 
     void TaskManager::collectGarbage() {
@@ -426,6 +444,10 @@ namespace hex {
     void TaskManager::runWhenTasksFinished(const std::function<void()> &function) {
         std::scoped_lock lock(s_tasksFinishedMutex);
 
+        for (const auto &task : s_tasks) {
+            task->interrupt();
+        }
+
         s_tasksFinishedCallbacks.push_back(function);
     }
 
@@ -439,7 +461,7 @@ namespace hex {
             static auto setThreadDescription = reinterpret_cast<SetThreadDescriptionFunc>(
                 reinterpret_cast<uintptr_t>(
                     ::GetProcAddress(
-                        ::GetModuleHandle("Kernel32.dll"),
+                        ::GetModuleHandleW(L"Kernel32.dll"),
                         "SetThreadDescription"
                     )
                 )
@@ -468,7 +490,7 @@ namespace hex {
         #elif defined(OS_LINUX)
                 pthread_setname_np(pthread_self(), name.c_str());
         #elif defined(OS_WEB)
-                hex::unused(name);
+                std::ignore = name;
         #elif defined(OS_MACOS)
                 pthread_setname_np(name.c_str());
         #endif

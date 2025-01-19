@@ -4,6 +4,7 @@
 #include <hex/api/project_file_manager.hpp>
 
 #include <hex/helpers/fs.hpp>
+#include <hex/helpers/default_paths.hpp>
 
 #include <toasts/toast_notification.hpp>
 #include <popups/popup_file_chooser.hpp>
@@ -21,7 +22,7 @@ namespace hex::plugin::yara {
         YaraRule::init();
 
         ContentRegistry::FileHandler::add({ ".yar", ".yara" }, [](const auto &path) {
-            for (const auto &destPath : fs::getDefaultPaths(fs::ImHexPath::Yara)) {
+            for (const auto &destPath : paths::Yara.write()) {
                 if (wolv::io::fs::copyFile(path, destPath / path.filename(), std::fs::copy_options::overwrite_existing)) {
                     ui::ToastInfo::open("hex.yara_rules.view.yara.rule_added"_lang);
                     return true;
@@ -143,7 +144,7 @@ namespace hex::plugin::yara {
         }
 
         if (ImGuiExt::IconButton(ICON_VS_ADD, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
-            const auto basePaths = fs::getDefaultPaths(fs::ImHexPath::Yara);
+            const auto basePaths = paths::Yara.read();
             std::vector<std::fs::path> paths;
             for (const auto &path : basePaths) {
                 std::error_code error;
@@ -162,15 +163,18 @@ namespace hex::plugin::yara {
         }
 
         ImGui::SameLine();
+        ImGui::BeginDisabled(*m_selectedRule >= m_rulePaths->size());
         if (ImGuiExt::IconButton(ICON_VS_REMOVE, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
-            if (*m_selectedRule < m_rulePaths->size()) {
-                m_rulePaths->erase(m_rulePaths->begin() + *m_selectedRule);
-                m_selectedRule = std::min(*m_selectedRule, u32(m_rulePaths->size() - 1));
-            }
+            m_rulePaths->erase(m_rulePaths->begin() + *m_selectedRule);
+            m_selectedRule = std::min(*m_selectedRule, u32(m_rulePaths->size() - 1));
         }
+        ImGui::EndDisabled();
 
         ImGui::NewLine();
-        if (ImGui::Button("hex.yara_rules.view.yara.match"_lang)) this->applyRules();
+
+        ImGui::BeginDisabled(m_rulePaths->empty());
+        if (ImGuiExt::DimmedButton("hex.yara_rules.view.yara.match"_lang)) this->applyRules();
+        ImGui::EndDisabled();
 
         if (m_matcherTask.isRunning()) {
             ImGui::SameLine();
@@ -246,7 +250,7 @@ namespace hex::plugin::yara {
         if (provider == nullptr)
             return;
 
-        m_matcherTask = TaskManager::createTask("hex.yara_rules.view.yara.matching", 0, [this, provider](auto &task) {
+        m_matcherTask = TaskManager::createTask("hex.yara_rules.view.yara.matching"_lang, 0, [this, provider](auto &task) {
             std::vector<YaraRule::Result> results;
             for (const auto &[fileName, filePath] : *m_rulePaths) {
                 YaraRule rule(filePath);

@@ -11,8 +11,6 @@ namespace hex::plugin::builtin {
 
     class FileProvider : public hex::prv::Provider {
     public:
-        constexpr static u64 MaxMemoryFileSize = 128 * 1024 * 1024;
-
         FileProvider() = default;
         ~FileProvider() override = default;
 
@@ -49,7 +47,7 @@ namespace hex::plugin::builtin {
         void loadSettings(const nlohmann::json &settings) override;
         [[nodiscard]] nlohmann::json storeSettings(nlohmann::json settings) const override;
 
-        [[nodiscard]] std::string getTypeName() const override {
+        [[nodiscard]] UnlocalizedString getTypeName() const override {
             return "hex.builtin.provider.file";
         }
 
@@ -57,7 +55,11 @@ namespace hex::plugin::builtin {
 
     private:
         void convertToMemoryFile();
+        void convertToDirectAccess();
+
         void handleFileChange();
+
+        bool open(bool memoryMapped);
 
     protected:
         std::fs::path m_path;
@@ -67,6 +69,8 @@ namespace hex::plugin::builtin {
         wolv::io::ChangeTracker m_changeTracker;
         std::vector<u8> m_data;
         bool m_loadedIntoMemory = false;
+        bool m_ignoreNextChangeEvent = false;
+        bool m_changeEventAcknowledgementPending = false;
 
         std::optional<struct stat> m_fileStats;
 

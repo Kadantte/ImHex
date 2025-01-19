@@ -21,24 +21,35 @@ option(IMHEX_REPLACE_DWARF_WITH_PDB     "Remove DWARF information from binaries 
 option(IMHEX_ENABLE_STD_ASSERTS         "Enable debug asserts in the C++ std library. (Breaks Plugin ABI!)"                     OFF)
 option(IMHEX_ENABLE_UNIT_TESTS          "Enable building unit tests"                                                            OFF)
 option(IMHEX_ENABLE_PRECOMPILED_HEADERS "Enable precompiled headers"                                                            OFF)
+option(IMHEX_COMPRESS_DEBUG_INFO        "Compress debug information"                                                            ON )
+
+set(IMHEX_BASE_FOLDER "${CMAKE_CURRENT_SOURCE_DIR}")
+set(CMAKE_MODULE_PATH "${IMHEX_BASE_FOLDER}/cmake/modules")
+
+# Optional IDE support
+include("${IMHEX_BASE_FOLDER}/cmake/ide_helpers.cmake")
 
 # Basic compiler and cmake configurations
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_INCLUDE_DIRECTORIES_BEFORE ON)
-set(IMHEX_BASE_FOLDER "${CMAKE_CURRENT_SOURCE_DIR}")
-set(CMAKE_MODULE_PATH "${IMHEX_BASE_FOLDER}/cmake/modules")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include("${IMHEX_BASE_FOLDER}/cmake/build_helpers.cmake")
 
 # Setup project
-loadVersion(IMHEX_VERSION)
+loadVersion(IMHEX_VERSION IMHEX_VERSION_PLAIN)
 setVariableInParent(IMHEX_VERSION ${IMHEX_VERSION})
+
 configureCMake()
 project(imhex
         LANGUAGES       C CXX
-        VERSION         ${IMHEX_VERSION}
+        VERSION         ${IMHEX_VERSION_PLAIN}
         DESCRIPTION     "The ImHex Hex Editor"
         HOMEPAGE_URL    "https://imhex.werwolv.net"
 )
+configureProject()
+
+# Add ImHex sources
+add_custom_target(imhex_all ALL)
 
 # Make sure project is configured correctly
 setDefaultBuiltTypeIfUnset()
@@ -56,19 +67,24 @@ configurePackingResources()
 setUninstallTarget()
 addBundledLibraries()
 
-# Add ImHex sources
-add_custom_target(imhex_all ALL)
-
 add_subdirectory(lib/libimhex)
 add_subdirectory(main)
+addPluginDirectories()
 
 # Add unit tests
 if (IMHEX_ENABLE_UNIT_TESTS)
-    enable_testing()
-    add_subdirectory(tests EXCLUDE_FROM_ALL)
+    if (NOT TARGET unit_tests)
+        enable_testing()
+        add_custom_target(unit_tests)
+        add_subdirectory(tests EXCLUDE_FROM_ALL)
+    endif ()
 endif ()
 
 # Configure more resources that will be added to the install package
-createPackage()
-generatePDBs()
 generateSDKDirectory()
+
+# Handle package generation
+createPackage()
+
+# Accommodate IDEs with FOLDER support
+tweakTargetsForIDESupport()

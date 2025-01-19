@@ -7,6 +7,7 @@
 #include <hex/helpers/http_requests.hpp>
 #include <hex/helpers/fs.hpp>
 #include <hex/helpers/logger.hpp>
+#include <hex/helpers/default_paths.hpp>
 
 #include <hex/api/content_registry.hpp>
 #include <hex/api/plugin_manager.hpp>
@@ -30,16 +31,30 @@ namespace hex::init {
         return true;
     }
 
+    static bool isSubPathWritable(std::fs::path path) {
+        for (u32 i = 0; i < 128; i++) {
+            if (hex::fs::isPathWritable(path))
+                return true;
+
+            auto parentPath = path.parent_path();
+            if (parentPath == path)
+                break;
+
+            path = std::move(parentPath);
+        }
+
+        return false;
+    }
+
     bool createDirectories() {
         bool result = true;
 
-        using enum fs::ImHexPath;
-
         // Try to create all default directories
-        for (u32 path = 0; path < u32(fs::ImHexPath::END); path++) {
-            for (auto &folder : fs::getDefaultPaths(static_cast<fs::ImHexPath>(path), true)) {
+        for (auto path : paths::All) {
+            for (auto &folder : path->all()) {
                 try {
-                    wolv::io::fs::createDirectories(folder);
+                    if (isSubPathWritable(folder.parent_path()))
+                        wolv::io::fs::createDirectories(folder);
                 } catch (...) {
                     log::error("Failed to create folder {}!", wolv::util::toUTF8String(folder));
                     result = false;
@@ -57,16 +72,20 @@ namespace hex::init {
         // Terminate all asynchronous tasks
         TaskManager::exit();
 
-        // Unlock font atlas so it can be deleted in case of a crash
-        if (ImGui::GetCurrentContext() != nullptr)
-            ImGui::GetIO().Fonts->Locked = false;
+        // Unlock font atlas, so it can be deleted in case of a crash
+        if (ImGui::GetCurrentContext() != nullptr) {
+            if (ImGui::GetIO().Fonts != nullptr) {
+                ImGui::GetIO().Fonts->Locked = false;
+                ImGui::GetIO().Fonts = nullptr;
+            }
+        }
 
         // Print a nice message if a crash happened while cleaning up resources
         // To the person fixing this:
         //     ALWAYS wrap static heap allocated objects inside libimhex such as std::vector, std::string, std::function, etc. in a AutoReset<T>
         //     e.g `AutoReset<std::vector<MyStruct>> m_structs;`
         //
-        //     The reason this is necessary is because each plugin / dynamic library gets its own instance of `std::allocator`
+        //     The reason this is necessary because each plugin / dynamic library gets its own instance of `std::allocator`
         //     which will try to free the allocated memory when the object is destroyed. However since the storage is static, this
         //     will happen only when libimhex is unloaded after main() returns. At this point all plugins have been unloaded already so
         //     the std::allocator will try to free memory in a heap that does not exist anymore which will cause a crash.
@@ -81,6 +100,7 @@ namespace hex::init {
         });
 
         ImHexApi::System::impl::cleanup();
+
         EventImHexClosing::post();
         EventManager::clear();
 
@@ -90,10 +110,11 @@ namespace hex::init {
     bool loadPlugins() {
         // Load all plugins
         #if !defined(IMHEX_STATIC_LINK_PLUGINS)
-            for (const auto &dir : fs::getDefaultPaths(fs::ImHexPath::Plugins)) {
+            for (const auto &dir : paths::Plugins.read()) {
                 PluginManager::addLoadPath(dir);
             }
 
+            PluginManager::loadLibraries();
             PluginManager::load();
         #endif
 
@@ -179,8 +200,8 @@ namespace hex::init {
     bool deleteOldFiles() {
         bool result = true;
 
-        auto keepNewest = [&](u32 count, fs::ImHexPath pathType) {
-            for (const auto &path : fs::getDefaultPaths(pathType)) {
+        auto keepNewest = [&](u32 count, const paths::impl::DefaultPath &pathType) {
+            for (const auto &path : pathType.write()) {
                 try {
                     std::vector<std::filesystem::directory_entry> files;
 
@@ -203,8 +224,8 @@ namespace hex::init {
             }
         };
 
-        keepNewest(10, fs::ImHexPath::Logs);
-        keepNewest(25, fs::ImHexPath::Backups);
+        keepNewest(10, paths::Logs);
+        keepNewest(25, paths::Backups);
 
         return result;
     }
@@ -220,33 +241,17 @@ namespace hex::init {
             // Try to load settings from file
             ContentRegistry::Settings::impl::load();
         } catch (std::exception &e) {
-            // If that fails, create a new settings file
-
             log::error("Failed to load configuration! {}", e.what());
 
-            ContentRegistry::Settings::impl::clear();
-            ContentRegistry::Settings::impl::store();
-
             return false;
         }
 
-        return true;
-    }
-
-    bool storeSettings() {
-        try {
-            ContentRegistry::Settings::impl::store();
-            AchievementManager::storeProgress();
-        } catch (std::exception &e) {
-            log::error("Failed to store configuration! {}", e.what());
-            return false;
-        }
         return true;
     }
 
     // Run all exit tasks, and print to console
     void runExitTasks() {
-        for (const auto &[name, task, async] : init::getExitTasks()) {
+        for (const auto &[name, task, async, running] : init::getExitTasks()) {
             const bool result = task();
             log::info("Exit task '{0}' finished {1}", name, result ? "successfully" : "unsuccessfully");
         }
@@ -254,19 +259,18 @@ namespace hex::init {
 
     std::vector<Task> getInitTasks() {
         return {
-            { "Setting up environment",  setupEnvironment,    false },
-            { "Creating directories",    createDirectories,   false },
-            { "Loading settings",        loadSettings,        false },
-            { "Loading plugins",         loadPlugins,         false },
+            { "Setting up environment",  setupEnvironment,    false, false },
+            { "Creating directories",    createDirectories,   false, false },
+            { "Loading settings",        loadSettings,        false, false },
+            { "Loading plugins",         loadPlugins,         false, false },
         };
     }
 
     std::vector<Task> getExitTasks() {
         return {
-            { "Saving settings",         storeSettings,    false },
-            { "Prepare exit",            prepareExit,      false },
-            { "Unloading plugins",       unloadPlugins,    false },
-            { "Deleting old files",      deleteOldFiles,   false },
+            { "Prepare exit",            prepareExit,      false, false },
+            { "Unloading plugins",       unloadPlugins,    false, false },
+            { "Deleting old files",      deleteOldFiles,   false, false },
         };
     }
 

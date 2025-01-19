@@ -26,12 +26,35 @@
     #include <hex/helpers/utils_linux.hpp>
 #endif
 
-struct ImVec2;
+#include <imgui.h>
 
 namespace hex {
 
     namespace prv {
         class Provider;
+    }
+
+    template<typename T>
+    [[nodiscard]] std::vector<std::vector<T>> sampleChannels(const std::vector<T> &data, size_t count, size_t channels) {
+        if (channels == 0) return {};
+        size_t signalLength = std::max(1.0, double(data.size()) / channels);
+
+        size_t stride = std::max(1.0, double(signalLength) / count);
+
+        std::vector<std::vector<T>> result;
+        result.resize(channels);
+        for (size_t i = 0; i < channels; i++) {
+            result[i].reserve(count);
+        }
+        result.reserve(count);
+
+        for (size_t i = 0; i < data.size(); i += stride) {
+            for (size_t j = 0; j < channels; j++) {
+                result[j].push_back(data[i + j]);
+            }
+        }
+
+        return result;
     }
 
     template<typename T>
@@ -152,7 +175,7 @@ namespace hex {
     using SizeType = typename SizeTypeImpl<Size>::Type;
 
     template<typename T>
-    [[nodiscard]] constexpr T changeEndianess(const T &value, size_t size, std::endian endian) {
+    [[nodiscard]] constexpr T changeEndianness(const T &value, size_t size, std::endian endian) {
         if (endian == std::endian::native)
             return value;
 
@@ -172,8 +195,8 @@ namespace hex {
     }
 
     template<typename T>
-    [[nodiscard]] constexpr T changeEndianess(const T &value, std::endian endian) {
-        return changeEndianess(value, sizeof(value), endian);
+    [[nodiscard]] constexpr T changeEndianness(const T &value, std::endian endian) {
+        return changeEndianness(value, sizeof(value), endian);
     }
 
     [[nodiscard]] constexpr u128 bitmask(u8 bits) {
@@ -262,13 +285,13 @@ namespace hex {
 
     [[nodiscard]] float float16ToFloat32(u16 float16);
 
-    [[nodiscard]] inline bool equalsIgnoreCase(const std::string &left, const std::string &right) {
+    [[nodiscard]] inline bool equalsIgnoreCase(std::string_view left, std::string_view right) {
         return std::equal(left.begin(), left.end(), right.begin(), right.end(), [](char a, char b) {
             return tolower(a) == tolower(b);
         });
     }
 
-    [[nodiscard]] inline bool containsIgnoreCase(const std::string &a, const std::string &b) {
+    [[nodiscard]] inline bool containsIgnoreCase(std::string_view a, std::string_view b) {
         auto iter = std::search(a.begin(), a.end(), b.begin(), b.end(), [](char ch1, char ch2) {
             return std::toupper(ch1) == std::toupper(ch2);
         });
@@ -298,31 +321,7 @@ namespace hex {
 
     [[nodiscard]] std::optional<std::string> getEnvironmentVariable(const std::string &env);
 
-    [[nodiscard]] inline std::string limitStringLength(const std::string &string, size_t maxLength) {
-        // If the string is shorter than the max length, return it as is
-        if (string.size() < maxLength)
-            return string;
-
-        // If the string is longer than the max length, find the last space before the max length
-        auto it = string.begin() + maxLength;
-        while (it != string.begin() && !std::isspace(*it)) --it;
-
-        // If there's no space before the max length, just cut the string
-        if (it == string.begin()) {
-            it = string.begin() + maxLength;
-
-            // Try to find a UTF-8 character boundary
-            while (it != string.begin() && (*it & 0x80) != 0x00) --it;
-            ++it;
-        }
-
-        // If we still didn't find a valid boundary, just return the string as is
-        if (it == string.begin())
-            return string;
-
-        // Append
-        return std::string(string.begin(), it) + "…";
-    }
+    [[nodiscard]] std::string limitStringLength(const std::string &string, size_t maxLength);
 
     [[nodiscard]] std::optional<std::fs::path> getInitialFilePath();
 
@@ -330,5 +329,17 @@ namespace hex {
     [[nodiscard]] std::string generateHexView(u64 offset, const std::vector<u8> &data);
 
     [[nodiscard]] std::string formatSystemError(i32 error);
+
+    /**
+     * Gets the shared library handle for a given pointer
+     * @param symbol Pointer to any function or variable in the shared library
+     * @return The module handle
+     * @warning Important! Calling this function on functions defined in other modules will return the handle of the current module!
+     *          This is because you're not actually passing a pointer to the function in the other module but rather a pointer to a thunk
+     *          that is defined in the current module.
+     */
+    [[nodiscard]] void* getContainingModule(void* symbol);
+
+    [[nodiscard]] std::optional<ImColor> blendColors(const std::optional<ImColor> &a, const std::optional<ImColor> &b);
 
 }

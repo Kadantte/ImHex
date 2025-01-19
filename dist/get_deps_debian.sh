@@ -8,8 +8,8 @@ fi
 
 apt install -y \
   build-essential       \
-  gcc-12                \
-  g++-12                \
+  gcc-14                \
+  g++-14                \
   lld                   \
   ${PKGCONF:-}          \
   cmake                 \
@@ -18,6 +18,7 @@ apt install -y \
   libglm-dev            \
   libmagic-dev          \
   libmbedtls-dev        \
+  libfontconfig-dev     \
   libfreetype-dev       \
   libdbus-1-dev         \
   libcurl4-gnutls-dev   \
@@ -26,4 +27,5 @@ apt install -y \
   zlib1g-dev            \
   libbz2-dev            \
   liblzma-dev           \
-  libzstd-dev
+  libzstd-dev           \
+  liblz4-dev

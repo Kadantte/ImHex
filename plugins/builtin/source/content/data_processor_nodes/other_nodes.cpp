@@ -83,15 +83,30 @@ namespace hex::plugin::builtin {
 
     class NodeCastIntegerToBuffer : public dp::Node {
     public:
-        NodeCastIntegerToBuffer() : Node("hex.builtin.nodes.casting.int_to_buffer.header", { dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Integer, "hex.builtin.nodes.common.input"), dp::Attribute(dp::Attribute::IOType::Out, dp::Attribute::Type::Buffer, "hex.builtin.nodes.common.output") }) { }
+        NodeCastIntegerToBuffer() : Node("hex.builtin.nodes.casting.int_to_buffer.header", { dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Integer, "hex.builtin.nodes.common.input"), dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Integer, "hex.builtin.nodes.buffer.size"), dp::Attribute(dp::Attribute::IOType::Out, dp::Attribute::Type::Buffer, "hex.builtin.nodes.common.output") }) { }
 
         void process() override {
             const auto &input = this->getIntegerOnInput(0);
+            auto size = this->getIntegerOnInput(1);
 
-            std::vector<u8> output(sizeof(input), 0x00);
-            std::memcpy(output.data(), &input, sizeof(input));
+            if (size == 0) {
+                for (u32 i = 0; i < sizeof(input); i++) {
+                    if ((input >> (i * 8)) == 0) {
+                        size = i;
+                        break;
+                    }
+                }
 
-            this->setBufferOnOutput(1, output);
+                if (size == 0)
+                    size = 1;
+            } else if (size > sizeof(input)) {
+                throwNodeError("Integers cannot hold more than 16 bytes");
+            }
+
+            std::vector<u8> output(size, 0x00);
+            std::memcpy(output.data(), &input, size);
+
+            this->setBufferOnOutput(2, output);
         }
     };
 
@@ -276,10 +291,14 @@ namespace hex::plugin::builtin {
         NodeVisualizerImage() : Node("hex.builtin.nodes.visualizer.image.header", { dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Buffer, "hex.builtin.nodes.common.input") }) { }
 
         void drawNode() override {
-            ImGui::Image(m_texture, scaled(ImVec2(m_texture.getAspectRatio() * 200, 200)));
+            if (!m_texture.has_value()) {
+                m_texture = ImGuiExt::Texture::fromImage(m_data.data(), m_data.size(), ImGuiExt::Texture::Filter::Nearest);
+            }
+
+            ImGui::Image(*m_texture, scaled(ImVec2(m_texture->getAspectRatio() * 200, 200)));
             if (ImGui::IsItemHovered() && ImGui::IsKeyDown(ImGuiKey_LeftShift)) {
                 ImGui::BeginTooltip();
-                ImGui::Image(m_texture, scaled(ImVec2(m_texture.getAspectRatio() * 600, 600)));
+                ImGui::Image(*m_texture, scaled(ImVec2(m_texture->getAspectRatio() * 600, 600)));
                 ImGui::EndTooltip();
             }
         }
@@ -287,11 +306,12 @@ namespace hex::plugin::builtin {
         void process() override {
             const auto &rawData = this->getBufferOnInput(0);
 
-            m_texture = ImGuiExt::Texture(rawData.data(), rawData.size(), ImGuiExt::Texture::Filter::Nearest);
+            m_data = rawData;
         }
 
     private:
-        ImGuiExt::Texture m_texture;
+        std::vector<u8> m_data;
+        std::optional<ImGuiExt::Texture> m_texture;
     };
 
     class NodeVisualizerImageRGBA : public dp::Node {
@@ -299,10 +319,14 @@ namespace hex::plugin::builtin {
         NodeVisualizerImageRGBA() : Node("hex.builtin.nodes.visualizer.image_rgba.header", { dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Buffer, "hex.builtin.nodes.common.input"), dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Integer, "hex.builtin.nodes.common.width"), dp::Attribute(dp::Attribute::IOType::In, dp::Attribute::Type::Integer, "hex.builtin.nodes.common.height") }) { }
 
         void drawNode() override {
-            ImGui::Image(m_texture, scaled(ImVec2(m_texture.getAspectRatio() * 200, 200)));
+            if (!m_texture.has_value()) {
+                m_texture = ImGuiExt::Texture::fromImage(m_data.data(), m_data.size(), ImGuiExt::Texture::Filter::Nearest);
+            }
+
+            ImGui::Image(*m_texture, scaled(ImVec2(m_texture->getAspectRatio() * 200, 200)));
             if (ImGui::IsItemHovered() && ImGui::IsKeyDown(ImGuiKey_LeftShift)) {
                 ImGui::BeginTooltip();
-                ImGui::Image(m_texture, scaled(ImVec2(m_texture.getAspectRatio() * 600, 600)));
+                ImGui::Image(*m_texture, scaled(ImVec2(m_texture->getAspectRatio() * 600, 600)));
                 ImGui::EndTooltip();
             }
         }
@@ -318,11 +342,12 @@ namespace hex::plugin::builtin {
             if (requiredBytes > rawData.size())
                 throwNodeError(hex::format("Image requires at least {} bytes of data, but only {} bytes are available", requiredBytes, rawData.size()));
 
-            m_texture = ImGuiExt::Texture(rawData.data(), rawData.size(), ImGuiExt::Texture::Filter::Nearest, width, height);
+            m_data = rawData;
         }
 
     private:
-        ImGuiExt::Texture m_texture;
+        std::vector<u8> m_data;
+        std::optional<ImGuiExt::Texture> m_texture;
     };
 
     class NodeVisualizerByteDistribution : public dp::Node {

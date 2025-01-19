@@ -23,11 +23,11 @@ namespace hex::plugin::hashes {
             reader.seek(region.getStartAddress());
             reader.setEndAddress(region.getEndAddress());
 
-            for (u64 address = region.getStartAddress(); address < region.getEndAddress(); address += 1_MiB) {
+            for (u64 address = region.getStartAddress(); address <= region.getEndAddress(); address += 1_MiB) {
                 u64 readSize = std::min<u64>(1_MiB, (region.getEndAddress() - address) + 1);
 
                 auto data = reader.read(address, readSize);
-                hashFunction->TransformBytes({ data.begin(), data.end() }, address - region.getStartAddress(), data.size());
+                hashFunction->TransformBytes({ data.begin(), data.end() }, 0, data.size());
             }
 
             auto result = hashFunction->TransformFinal();
@@ -219,9 +219,9 @@ namespace hex::plugin::hashes {
         size_t m_selectedCrc = 0;
 
         u32 m_width = 3;
-        u32 m_polynomial = 0;
-        u32 m_initialValue = 0;
-        u32 m_xorOut = 0;
+        u64 m_polynomial = 0;
+        u64 m_initialValue = 0;
+        u64 m_xorOut = 0;
         bool m_reflectIn = false, m_reflectOut = false;
     };
 

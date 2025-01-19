@@ -1,3 +1,17 @@
+# Some libraries we use set the BUILD_SHARED_LIBS variable to ON, which causes CMake to
+# display a warning about options being set using set() instead of option().
+# Explicitly set the policy to NEW to suppress the warning.
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+
+set(CMAKE_POLICY_DEFAULT_CMP0063 NEW)
+
+if (POLICY CMP0177)
+    set(CMAKE_POLICY_DEFAULT_CMP0177 OLD)
+    cmake_policy(SET CMP0177 OLD)
+endif()
+
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "Disable deprecated warnings" FORCE)
+
 include(FetchContent)
 
 if(IMHEX_STRIP_RELEASE)
@@ -59,6 +73,7 @@ macro(detectOS)
         set(CMAKE_INSTALL_LIBDIR ".")
         set(PLUGINS_INSTALL_LOCATION "plugins")
         add_compile_definitions(WIN32_LEAN_AND_MEAN)
+        add_compile_definitions(UNICODE)
     elseif (APPLE)
         add_compile_definitions(OS_MACOS)
         set(CMAKE_INSTALL_BINDIR ".")
@@ -70,6 +85,9 @@ macro(detectOS)
         add_compile_definitions(OS_WEB)
     elseif (UNIX AND NOT APPLE)
         add_compile_definitions(OS_LINUX)
+        if (BSD AND BSD STREQUAL "FreeBSD")
+            add_compile_definitions(OS_FREEBSD)
+        endif()
         include(GNUInstallDirs)
 
         if(IMHEX_PLUGINS_IN_SHARE)
@@ -89,6 +107,8 @@ macro(detectOS)
 endmacro()
 
 macro(configurePackingResources)
+    set(LIBRARY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+
     if (WIN32)
         if (NOT (CMAKE_BUILD_TYPE STREQUAL "Debug"))
             set(APPLICATION_TYPE WIN32)
@@ -142,21 +162,17 @@ macro(configurePackingResources)
     endif()
 endmacro()
 
-macro(createPackage)
-    set(LIBRARY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
+macro(addPluginDirectories)
     file(MAKE_DIRECTORY "plugins")
     foreach (plugin IN LISTS PLUGINS)
         add_subdirectory("plugins/${plugin}")
         if (TARGET ${plugin})
-            set_target_properties(${plugin} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins)
-            set_target_properties(${plugin} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins)
+            set_target_properties(${plugin} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${IMHEX_MAIN_OUTPUT_DIRECTORY}/plugins")
+            set_target_properties(${plugin} PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${IMHEX_MAIN_OUTPUT_DIRECTORY}/plugins")
 
             if (APPLE)
                 if (IMHEX_GENERATE_PACKAGE)
                     set_target_properties(${plugin} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${PLUGINS_INSTALL_LOCATION})
-                else ()
-                    set_target_properties(${plugin} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins)
                 endif ()
             else ()
                 if (WIN32)
@@ -175,9 +191,9 @@ macro(createPackage)
             add_dependencies(imhex_all ${plugin})
         endif ()
     endforeach()
+endmacro()
 
-    set_target_properties(libimhex PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-
+macro(createPackage)
     if (WIN32)
         # Install binaries directly in the prefix, usually C:\Program Files\ImHex.
         set(CMAKE_INSTALL_BINDIR ".")
@@ -214,7 +230,6 @@ macro(createPackage)
         endforeach()
         ]])
 
-        install(FILES "$<TARGET_FILE:libimhex>" DESTINATION "${CMAKE_INSTALL_LIBDIR}" PERMISSIONS ${LIBRARY_PERMISSIONS})
         downloadImHexPatternsFiles("./")
     elseif(UNIX AND NOT APPLE)
 
@@ -224,8 +239,8 @@ macro(createPackage)
 
         install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_PREFIX}/share/licenses/imhex)
         install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/imhex.desktop DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications)
-        install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.png DESTINATION ${CMAKE_INSTALL_PREFIX}/share/pixmaps RENAME imhex.png)
-        install(FILES "$<TARGET_FILE:libimhex>" DESTINATION "${CMAKE_INSTALL_LIBDIR}" PERMISSIONS ${LIBRARY_PERMISSIONS})
+        install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dist/imhex.mime.xml DESTINATION ${CMAKE_INSTALL_PREFIX}/share/mime/packages RENAME imhex.xml)
+        install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.svg DESTINATION ${CMAKE_INSTALL_PREFIX}/share/pixmaps RENAME imhex.svg)
         downloadImHexPatternsFiles("./share/imhex")
 
         # install AppStream file
@@ -239,6 +254,7 @@ macro(createPackage)
 
     if (APPLE)
         if (IMHEX_GENERATE_PACKAGE)
+            set(EXTRA_BUNDLE_LIBRARY_PATHS ${EXTRA_BUNDLE_LIBRARY_PATHS} "${IMHEX_SYSTEM_LIBRARY_PATH}")
             include(PostprocessBundle)
 
             set_target_properties(libimhex PROPERTIES SOVERSION ${IMHEX_VERSION})
@@ -246,17 +262,15 @@ macro(createPackage)
             set_property(TARGET main PROPERTY MACOSX_BUNDLE_INFO_PLIST ${MACOSX_BUNDLE_INFO_PLIST})
 
             # Fix rpath
-            add_custom_command(TARGET imhex_all POST_BUILD COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath "@executable_path/../Frameworks/" $<TARGET_FILE:main> || true)
+            install(CODE "execute_process(COMMAND ${CMAKE_INSTALL_NAME_TOOL} -add_rpath \"@executable_path/../Frameworks/\" $<TARGET_FILE:main>)")
 
             add_custom_target(build-time-make-plugins-directory ALL COMMAND ${CMAKE_COMMAND} -E make_directory "${IMHEX_BUNDLE_PATH}/Contents/MacOS/plugins")
             add_custom_target(build-time-make-resources-directory ALL COMMAND ${CMAKE_COMMAND} -E make_directory "${IMHEX_BUNDLE_PATH}/Contents/Resources")
 
-            downloadImHexPatternsFiles("${IMHEX_BUNDLE_PATH}/Contents/MacOS")
+            downloadImHexPatternsFiles("${CMAKE_INSTALL_PREFIX}/${BUNDLE_NAME}/Contents/MacOS")
 
-            install(FILES ${IMHEX_ICON} DESTINATION "${IMHEX_BUNDLE_PATH}/Contents/Resources")
+            install(FILES ${IMHEX_ICON} DESTINATION "${CMAKE_INSTALL_PREFIX}/${BUNDLE_NAME}/Contents/Resources")
             install(TARGETS main BUNDLE DESTINATION ".")
-        install(FILES $<TARGET_FILE:main> DESTINATION "${IMHEX_BUNDLE_PATH}")
-        install(FILES $<TARGET_FILE:updater> DESTINATION "${IMHEX_BUNDLE_PATH}")
 
             # Update library references to make the bundle portable
             postprocess_bundle(imhex_all main)
@@ -265,15 +279,19 @@ macro(createPackage)
             set(CPACK_GENERATOR "DragNDrop")
 
             set(CPACK_BUNDLE_ICON "${CMAKE_SOURCE_DIR}/resources/dist/macos/AppIcon.icns")
-            set(CPACK_BUNDLE_PLIST "${CMAKE_BINARY_DIR}/${BUNDLE_NAME}/Contents/Info.plist")
+            set(CPACK_BUNDLE_PLIST "${CMAKE_INSTALL_PREFIX}/${BUNDLE_NAME}/Contents/Info.plist")
 
             if (IMHEX_RESIGN_BUNDLE)
-                message(STATUS "Resigning bundle...")
                 find_program(CODESIGN_PATH codesign)
                 if (CODESIGN_PATH)
-                    add_custom_command(TARGET imhex_all POST_BUILD COMMAND "codesign" ARGS "--force" "--deep" "--sign" "-" "${CMAKE_BINARY_DIR}/${BUNDLE_NAME}")
+                    install(CODE "message(STATUS \"Signing bundle '${CMAKE_INSTALL_PREFIX}/${BUNDLE_NAME}'...\")")
+                    install(CODE "execute_process(COMMAND ${CODESIGN_PATH} --force --deep --entitlements ${CMAKE_SOURCE_DIR}/resources/macos/Entitlements.plist --sign - ${CMAKE_INSTALL_PREFIX}/${BUNDLE_NAME} COMMAND_ERROR_IS_FATAL ANY)")
                 endif()
             endif()
+
+            install(CODE [[ message(STATUS "MacOS Bundle finalized. DO NOT TOUCH IT ANYMORE! ANY MODIFICATIONS WILL BREAK IT FROM NOW ON!") ]])
+        else()
+            downloadImHexPatternsFiles("${IMHEX_MAIN_OUTPUT_DIRECTORY}")
         endif()
     else()
         install(TARGETS main RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -304,9 +322,6 @@ endfunction()
 
 macro(configureCMake)
     message(STATUS "Configuring ImHex v${IMHEX_VERSION}")
-
-    # Enable C and C++ languages
-    enable_language(C CXX)
 
     set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "Enable position independent code for all targets" FORCE)
 
@@ -341,8 +356,11 @@ macro(configureCMake)
 
         if (LD_LLD_PATH)
             set(CMAKE_LINKER ${LD_LLD_PATH})
-            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fuse-ld=lld")
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fuse-ld=lld")
+
+            if (NOT XCODE)
+                set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fuse-ld=lld")
+                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fuse-ld=lld")
+            endif()
         else ()
             message(WARNING "lld not found, using default linker!")
         endif ()
@@ -366,16 +384,19 @@ macro(configureCMake)
             message(WARNING "LTO is not supported: ${output_error}")
         endif ()
     endif ()
-
-    # Some libraries we use set the BUILD_SHARED_LIBS variable to ON, which causes CMake to
-    # display a warning about options being set using set() instead of option().
-    # Explicitly set the policy to NEW to suppress the warning.
-    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-
-    set(CMAKE_POLICY_DEFAULT_CMP0063 NEW)
-
-    set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "Disable deprecated warnings" FORCE)
 endmacro()
+
+function(configureProject)
+    # Enable C and C++ languages
+    enable_language(C CXX)
+
+    if (XCODE)
+        # Support Xcode's multi configuration paradigm by placing built artifacts into separate directories
+        set(IMHEX_MAIN_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Configs/$<CONFIG>" PARENT_SCOPE)
+    else()
+        set(IMHEX_MAIN_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" PARENT_SCOPE)
+    endif()
+endfunction()
 
 macro(setDefaultBuiltTypeIfUnset)
     if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -384,12 +405,14 @@ macro(setDefaultBuiltTypeIfUnset)
     endif()
 endmacro()
 
-function(loadVersion version)
+function(loadVersion version plain_version)
     set(VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${VERSION_FILE})
     file(READ "${VERSION_FILE}" read_version)
     string(STRIP ${read_version} read_version)
+    string(REPLACE ".WIP" "" read_version_plain ${read_version})
     set(${version} ${read_version} PARENT_SCOPE)
+    set(${plain_version} ${read_version_plain} PARENT_SCOPE)
 endfunction()
 
 function(detectBadClone)
@@ -479,20 +502,71 @@ function(downloadImHexPatternsFiles dest)
         message(STATUS "Finished downloading ImHex-Patterns")
 
     else ()
+        set(imhex_patterns_SOURCE_DIR "")
+
         # Maybe patterns are cloned to a subdirectory
-        set(imhex_patterns_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImHex-Patterns")
+        if (NOT EXISTS ${imhex_patterns_SOURCE_DIR})
+            set(imhex_patterns_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ImHex-Patterns")        
+        endif()
+
+        # Or a sibling directory
+        if (NOT EXISTS ${imhex_patterns_SOURCE_DIR})
+            set(imhex_patterns_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ImHex-Patterns")        
+        endif()
     endif ()
 
-    if (EXISTS ${imhex_patterns_SOURCE_DIR})
+    if (NOT EXISTS ${imhex_patterns_SOURCE_DIR}) 
+        message(WARNING "Failed to locate ImHex-Patterns repository, some resources will be missing during install!")
+    elseif(XCODE)
+        # The Xcode build has multiple configurations, which each need a copy of these files
+        file(GLOB_RECURSE sourceFilePaths LIST_DIRECTORIES NO CONFIGURE_DEPENDS RELATIVE "${imhex_patterns_SOURCE_DIR}"
+            "${imhex_patterns_SOURCE_DIR}/constants/*"
+            "${imhex_patterns_SOURCE_DIR}/encodings/*"
+            "${imhex_patterns_SOURCE_DIR}/includes/*"
+            "${imhex_patterns_SOURCE_DIR}/patterns/*"
+            "${imhex_patterns_SOURCE_DIR}/magic/*"
+            "${imhex_patterns_SOURCE_DIR}/nodes/*"
+        )
+        list(FILTER sourceFilePaths EXCLUDE REGEX "_schema.json$")
+
+        foreach(relativePath IN LISTS sourceFilePaths)
+            file(GENERATE OUTPUT "${dest}/${relativePath}" INPUT "${imhex_patterns_SOURCE_DIR}/${relativePath}")
+        endforeach()
+    else()
         set(PATTERNS_FOLDERS_TO_INSTALL constants encodings includes patterns magic nodes)
         foreach (FOLDER ${PATTERNS_FOLDERS_TO_INSTALL})
-            install(DIRECTORY "${imhex_patterns_SOURCE_DIR}/${FOLDER}" DESTINATION ${dest} PATTERN "**/_schema.json" EXCLUDE)
+            install(DIRECTORY "${imhex_patterns_SOURCE_DIR}/${FOLDER}" DESTINATION "${dest}" PATTERN "**/_schema.json" EXCLUDE)
         endforeach ()
     endif ()
 
 endfunction()
 
+# Compress debug info. See https://github.com/WerWolv/ImHex/issues/1714 for relevant problem
+macro(setupDebugCompressionFlag)
+    include(CheckCXXCompilerFlag)
+    include(CheckLinkerFlag)
+
+    check_cxx_compiler_flag(-gz=zstd ZSTD_AVAILABLE_COMPILER)
+    check_linker_flag(CXX -gz=zstd ZSTD_AVAILABLE_LINKER)
+    check_cxx_compiler_flag(-gz COMPRESS_AVAILABLE_COMPILER)
+    check_linker_flag(CXX -gz COMPRESS_AVAILABLE_LINKER)
+
+    if (NOT DEBUG_COMPRESSION_FLAG) # Cache variable
+        if (ZSTD_AVAILABLE_COMPILER AND ZSTD_AVAILABLE_LINKER)
+            message("Using Zstd compression for debug info because both compiler and linker support it")
+            set(DEBUG_COMPRESSION_FLAG "-gz=zstd" CACHE STRING "Cache to use for debug info compression")
+        elseif (COMPRESS_AVAILABLE_COMPILER AND COMPRESS_AVAILABLE_LINKER)
+            message("Using default compression for debug info because both compiler and linker support it")
+            set(DEBUG_COMPRESSION_FLAG "-gz" CACHE STRING "Cache to use for debug info compression")
+        endif()
+    endif()
+
+    set(IMHEX_COMMON_FLAGS "${IMHEX_COMMON_FLAGS} ${DEBUG_COMPRESSION_FLAG}")
+endmacro()
+
 macro(setupCompilerFlags target)
+    # IMHEX_COMMON_FLAGS: flags common for C, C++, Objective C, etc.. compilers
+
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         # Define strict compilation flags
         if (IMHEX_STRICT_WARNINGS)
@@ -506,13 +580,20 @@ macro(setupCompilerFlags target)
         set(IMHEX_CXX_FLAGS "-fexceptions -frtti")
 
         # Disable some warnings
-        set(IMHEX_C_CXX_FLAGS "-Wno-unknown-warning-option -Wno-array-bounds -Wno-deprecated-declarations -Wno-unknown-pragmas")
+        set(IMHEX_C_CXX_FLAGS "-Wno-array-bounds -Wno-deprecated-declarations -Wno-unknown-pragmas")
     endif()
 
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
         if (IMHEX_ENABLE_UNITY_BUILD AND WIN32)
             set(IMHEX_COMMON_FLAGS "${IMHEX_COMMON_FLAGS} -Wa,-mbig-obj")
         endif ()
+    endif()
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND APPLE)
+        execute_process(COMMAND brew --prefix llvm OUTPUT_VARIABLE LLVM_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+        set(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -L${LLVM_PREFIX}/lib/c++")
+        set(CMAKE_SHARED_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -L${LLVM_PREFIX}/lib/c++")
+        set(IMHEX_C_CXX_FLAGS "-Wno-unknown-warning-option")
     endif()
 
     # Disable some warnings for gcc
@@ -525,11 +606,24 @@ macro(setupCompilerFlags target)
         set(IMHEX_C_CXX_FLAGS "${IMHEX_C_CXX_FLAGS} -pthread -Wno-dollar-in-identifier-extension -Wno-pthreads-mem-growth")
     endif ()
 
+    if (IMHEX_COMPRESS_DEBUG_INFO)
+        setupDebugCompressionFlag()
+    endif()
+
     # Set actual CMake flags
     set_target_properties(${target} PROPERTIES COMPILE_FLAGS "${IMHEX_COMMON_FLAGS} ${IMHEX_C_CXX_FLAGS}")
     set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    ${IMHEX_COMMON_FLAGS} ${IMHEX_C_CXX_FLAGS}")
     set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  ${IMHEX_COMMON_FLAGS} ${IMHEX_C_CXX_FLAGS}  ${IMHEX_CXX_FLAGS}")
     set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} ${IMHEX_COMMON_FLAGS}")
+
+    # Only generate minimal debug information for stacktraces in RelWithDebInfo builds
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -g1")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -g1")
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        # Add flags for debug info in inline functions
+        set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -gstatement-frontiers -ginline-points")
+        set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -gstatement-frontiers -ginline-points")
+    endif()
 endmacro()
 
 # uninstall target
@@ -560,6 +654,7 @@ macro(addBundledLibraries)
     set(FPHSA_NAME_MISMATCHED ON CACHE BOOL "")
 
     if(NOT USE_SYSTEM_FMT)
+        set(FMT_INSTALL OFF CACHE BOOL "Disable install targets for libfmt" FORCE)
         add_subdirectory(${THIRD_PARTY_LIBS_FOLDER}/fmt EXCLUDE_FROM_ALL)
         set(FMT_LIBRARIES fmt::fmt-header-only)
     else()
@@ -595,6 +690,14 @@ macro(addBundledLibraries)
         set(NLOHMANN_JSON_LIBRARIES nlohmann_json::nlohmann_json)
     endif()
 
+    if (NOT USE_SYSTEM_LUNASVG)
+        add_subdirectory(${THIRD_PARTY_LIBS_FOLDER}/lunasvg EXCLUDE_FROM_ALL)
+        set(LUNASVG_LIBRARIES lunasvg)
+    else()
+        find_package(LunaSVG REQUIRED)
+        set(LUNASVG_LIBRARIES lunasvg)
+    endif()
+
     if (NOT USE_SYSTEM_LLVM)
         add_subdirectory(${THIRD_PARTY_LIBS_FOLDER}/llvm-demangle EXCLUDE_FROM_ALL)
     else()
@@ -613,6 +716,14 @@ macro(addBundledLibraries)
         set(JTHREAD_LIBRARIES jthread)
     endif()
 
+    if (USE_SYSTEM_BOOST)
+        find_package(Boost REQUIRED)
+        set(BOOST_LIBRARIES Boost::regex)
+    else()
+        add_subdirectory(${THIRD_PARTY_LIBS_FOLDER}/boost ${CMAKE_CURRENT_BINARY_DIR}/boost EXCLUDE_FROM_ALL)
+        set(BOOST_LIBRARIES boost::regex)
+    endif()
+
     set(LIBPL_BUILD_CLI_AS_EXECUTABLE OFF CACHE BOOL "" FORCE)
     set(LIBPL_ENABLE_PRECOMPILED_HEADERS ${IMHEX_ENABLE_PRECOMPILED_HEADERS} CACHE BOOL "" FORCE)
 
@@ -623,6 +734,7 @@ macro(addBundledLibraries)
     endif()
 
     add_subdirectory(${EXTERNAL_LIBS_FOLDER}/pattern_language EXCLUDE_FROM_ALL)
+    add_subdirectory(${EXTERNAL_LIBS_FOLDER}/disassembler EXCLUDE_FROM_ALL)
 
     if (LIBPL_SHARED_LIBRARY)
         install(
@@ -657,20 +769,20 @@ macro(addBundledLibraries)
             if (${Backtrace_FOUND})
                 message(STATUS "Backtrace enabled! Header: ${Backtrace_HEADER}")
 
-                if (Backtrace_HEADER STREQUAL "execinfo.h")
+                if (Backtrace_HEADER STREQUAL "backtrace.h")
                     set(LIBBACKTRACE_LIBRARIES ${Backtrace_LIBRARY})
                     set(LIBBACKTRACE_INCLUDE_DIRS ${Backtrace_INCLUDE_DIR})
-                    add_compile_definitions(BACKTRACE_HEADER=\"${Backtrace_HEADER}\")
-                    add_compile_definitions(HEX_HAS_EXECINFO)
-                elseif (Backtrace_HEADER STREQUAL "backtrace.h")
-                    set(LIBBACKTRACE_LIBRARIES ${Backtrace_LIBRARY})
-                    set(LIBBACKTRACE_INCLUDE_DIRS ${Backtrace_INCLUDE_DIR})
-                    add_compile_definitions(BACKTRACE_HEADER=\"${Backtrace_HEADER}\")
+                    add_compile_definitions(BACKTRACE_HEADER=<${Backtrace_HEADER}>)
                     add_compile_definitions(HEX_HAS_BACKTRACE)
-                endif ()
+                elseif (Backtrace_HEADER STREQUAL "execinfo.h")
+                    set(LIBBACKTRACE_LIBRARIES ${Backtrace_LIBRARY})
+                    set(LIBBACKTRACE_INCLUDE_DIRS ${Backtrace_INCLUDE_DIR})
+                    add_compile_definitions(BACKTRACE_HEADER=<${Backtrace_HEADER}>)
+                    add_compile_definitions(HEX_HAS_EXECINFO)
+                endif()
             endif()
-        endif ()
-    endif ()
+        endif()
+    endif()
 endmacro()
 
 function(enableUnityBuild TARGET)
@@ -679,64 +791,11 @@ function(enableUnityBuild TARGET)
     endif ()
 endfunction()
 
-function(generatePDBs)
-    if (NOT IMHEX_GENERATE_PDBS)
-        return()
-    endif ()
-
-    if (NOT WIN32 OR CMAKE_BUILD_TYPE STREQUAL "Debug")
-        return()
-    endif ()
-
-    include(FetchContent)
-    FetchContent_Declare(
-            cv2pdb
-            URL "https://github.com/rainers/cv2pdb/releases/download/v0.52/cv2pdb-0.52.zip"
-            DOWNLOAD_EXTRACT_TIMESTAMP ON
-    )
-    FetchContent_Populate(cv2pdb)
-
-    set(PDBS_TO_GENERATE main main-forwarder libimhex ${PLUGINS})
-    foreach (PDB ${PDBS_TO_GENERATE})
-        if (PDB STREQUAL "main")
-            set(GENERATED_PDB imhex)
-        elseif (PDB STREQUAL "main-forwarder")
-            set(GENERATED_PDB imhex-gui)
-        elseif (PDB STREQUAL "libimhex")
-            set(GENERATED_PDB libimhex)
-        else ()
-            set(GENERATED_PDB plugins/${PDB})
-        endif ()
-
-        if (IMHEX_REPLACE_DWARF_WITH_PDB)
-            set(PDB_OUTPUT_PATH ${CMAKE_BINARY_DIR}/${GENERATED_PDB})
-        else ()
-            set(PDB_OUTPUT_PATH)
-        endif()
-
-        add_custom_target(${PDB}_pdb DEPENDS ${CMAKE_BINARY_DIR}/${GENERATED_PDB}.pdb)
-        add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/${GENERATED_PDB}.pdb
-                WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-                COMMAND
-                (
-                    ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/${GENERATED_PDB}.pdb &&
-                    ${cv2pdb_SOURCE_DIR}/cv2pdb64.exe $<TARGET_FILE:${PDB}> ${PDB_OUTPUT_PATH} &&
-                    ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/${GENERATED_PDB}
-                ) || (exit 0)
-                COMMAND_EXPAND_LISTS)
-
-        install(FILES ${CMAKE_BINARY_DIR}/${GENERATED_PDB}.pdb DESTINATION ".")
-
-        add_dependencies(imhex_all ${PDB}_pdb)
-    endforeach ()
-
-endfunction()
-
 function(generateSDKDirectory)
     if (WIN32)
         set(SDK_PATH "./sdk")
     elseif (APPLE)
-        set(SDK_PATH "${BUNDLE_NAME}/Contents/Resources/sdk")
+        set(SDK_PATH "${CMAKE_INSTALL_PREFIX}/${BUNDLE_NAME}/Contents/Resources/sdk")
     else()
         set(SDK_PATH "share/imhex/sdk")
     endif()
@@ -752,11 +811,20 @@ function(generateSDKDirectory)
     if (NOT USE_SYSTEM_NLOHMANN_JSON)
         install(DIRECTORY ${CMAKE_SOURCE_DIR}/lib/third_party/nlohmann_json DESTINATION "${SDK_PATH}/lib/third_party")
     endif()
+    if (NOT USE_SYSTEM_BOOST)
+        install(DIRECTORY ${CMAKE_SOURCE_DIR}/lib/third_party/boost DESTINATION "${SDK_PATH}/lib/third_party")
+    endif()
 
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/cmake/modules DESTINATION "${SDK_PATH}/cmake")
     install(FILES ${CMAKE_SOURCE_DIR}/cmake/build_helpers.cmake DESTINATION "${SDK_PATH}/cmake")
     install(DIRECTORY ${CMAKE_SOURCE_DIR}/cmake/sdk/ DESTINATION "${SDK_PATH}")
     install(TARGETS libimhex ARCHIVE DESTINATION "${SDK_PATH}/lib")
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/plugins/ui DESTINATION "${SDK_PATH}/lib" PATTERN "**/source/*" EXCLUDE)
+    install(TARGETS ui ARCHIVE DESTINATION "${SDK_PATH}/lib")
+
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/plugins/fonts DESTINATION "${SDK_PATH}/lib" PATTERN "**/source/*" EXCLUDE)
+    install(TARGETS fonts ARCHIVE DESTINATION "${SDK_PATH}/lib")
 endfunction()
 
 function(addIncludesFromLibrary target library)

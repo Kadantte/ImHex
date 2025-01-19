@@ -1,4 +1,3 @@
-
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -7,6 +6,7 @@
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/task_manager.hpp>
 #include <hex/providers/provider.hpp>
+#include <hex/helpers/default_paths.hpp>
 
 #include <hex/helpers/fmt.hpp>
 #include <fmt/chrono.h>
@@ -16,10 +16,11 @@
 
 #include <content/recent.hpp>
 #include <toasts/toast_notification.hpp>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <ranges>
 #include <unordered_set>
+#include <ui/menu_items.hpp>
 
 namespace hex::plugin::builtin::recent {
 
@@ -41,7 +42,7 @@ namespace hex::plugin::builtin::recent {
             };
         public:
             PopupAutoBackups() : Popup("hex.builtin.welcome.start.recent.auto_backups", true, true) {
-                for (const auto &backupPath : fs::getDefaultPaths(fs::ImHexPath::Backups)) {
+                for (const auto &backupPath : paths::Backups.read()) {
                     for (const auto &entry : std::fs::directory_iterator(backupPath)) {
                         if (entry.is_regular_file() && entry.path().extension() == ".hexproj") {
                             wolv::io::File backupFile(entry.path(), wolv::io::File::Mode::Read);
@@ -69,7 +70,7 @@ namespace hex::plugin::builtin::recent {
                     ImGui::EndTable();
                 }
 
-                if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape)))
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape))
                     this->close();
             }
 
@@ -99,7 +100,7 @@ namespace hex::plugin::builtin::recent {
                     return;
 
                 // The recent provider is saved to every "recent" directory
-                for (const auto &recentPath : fs::getDefaultPaths(fs::ImHexPath::Recent)) {
+                for (const auto &recentPath : paths::Recent.write()) {
                     wolv::io::File recentFile(recentPath / fileName, wolv::io::File::Mode::Create);
                     if (!recentFile.isValid())
                         continue;
@@ -129,17 +130,15 @@ namespace hex::plugin::builtin::recent {
                     return;
 
                 // The recent provider is saved to every "recent" directory
-                for (const auto &recentPath : fs::getDefaultPaths(fs::ImHexPath::Recent)) {
+                for (const auto &recentPath : paths::Recent.write()) {
                     wolv::io::File recentFile(recentPath / fileName, wolv::io::File::Mode::Create);
                     if (!recentFile.isValid())
                         continue;
 
-                    std::string displayName = hex::format("[{}] {}", "hex.ui.common.project"_lang, wolv::util::toUTF8String(projectFileName));
-
                     nlohmann::json recentEntry {
-                        {"type", "project"},
-                        {"displayName", displayName},
-                        {"path", wolv::util::toUTF8String(ProjectFile::getPath())}
+                        { "type", "project" },
+                        { "displayName", wolv::util::toUTF8String(projectFileName) },
+                        { "path", wolv::util::toUTF8String(ProjectFile::getPath()) }
                     };
 
                     recentFile.writeString(recentEntry.dump(4));
@@ -151,7 +150,7 @@ namespace hex::plugin::builtin::recent {
     }
 
     void updateRecentEntries() {
-        TaskManager::createBackgroundTask("Updating recent files", [](auto&) {
+        TaskManager::createBackgroundTask("hex.builtin.task.updating_recents"_lang, [](auto&) {
             if (s_recentEntriesUpdating)
                 return;
 
@@ -162,7 +161,7 @@ namespace hex::plugin::builtin::recent {
 
             // Query all recent providers
             std::vector<std::fs::path> recentFilePaths;
-            for (const auto &folder : fs::getDefaultPaths(fs::ImHexPath::Recent)) {
+            for (const auto &folder : paths::Recent.read()) {
                 for (const auto &entry : std::fs::directory_iterator(folder)) {
                     if (entry.is_regular_file())
                         recentFilePaths.push_back(entry.path());
@@ -175,17 +174,31 @@ namespace hex::plugin::builtin::recent {
             });
 
             std::unordered_set<RecentEntry, RecentEntry::HashFunction> uniqueProviders;
-            for (u32 i = 0; i < recentFilePaths.size() && uniqueProviders.size() < MaxRecentEntries; i++) {
-                auto &path = recentFilePaths[i];
+            for (const auto &path : recentFilePaths) {
+                if (uniqueProviders.size() >= MaxRecentEntries)
+                    break;
+
                 try {
-                    auto jsonData = nlohmann::json::parse(wolv::io::File(path, wolv::io::File::Mode::Read).readString());
+                    wolv::io::File recentFile(path, wolv::io::File::Mode::Read);
+                    if (!recentFile.isValid()) {
+                        continue;
+                    }
+
+                    auto content = recentFile.readString();
+                    if (content.empty()) {
+                        continue;
+                    }
+
+                    auto jsonData = nlohmann::json::parse(content);
                     uniqueProviders.insert(RecentEntry {
                         .displayName    = jsonData.at("displayName"),
                         .type           = jsonData.at("type"),
                         .entryFilePath  = path,
                         .data           = jsonData
                     });
-                } catch (...) { }
+                } catch (const std::exception &e) {
+                    log::error("Failed to parse recent file: {}", e.what());
+                }
             }
 
             // Delete all recent provider files that are not in the list
@@ -205,7 +218,7 @@ namespace hex::plugin::builtin::recent {
             std::copy(uniqueProviders.begin(), uniqueProviders.end(), std::front_inserter(s_recentEntries));
 
             s_autoBackupsFound = false;
-            for (const auto &backupPath : fs::getDefaultPaths(fs::ImHexPath::Backups)) {
+            for (const auto &backupPath : paths::Backups.read()) {
                 for (const auto &entry : std::fs::directory_iterator(backupPath)) {
                     if (entry.is_regular_file() && entry.path().extension() == ".hexproj") {
                         s_autoBackupsFound = true;
@@ -245,8 +258,8 @@ namespace hex::plugin::builtin::recent {
         if (s_recentEntries.empty() && !s_autoBackupsFound)
             return;
 
-        ImGuiExt::BeginSubWindow("hex.builtin.welcome.start.recent"_lang, ImVec2(), ImGuiChildFlags_AutoResizeX);
-        {
+        static bool collapsed = false;
+        if (ImGuiExt::BeginSubWindow("hex.builtin.welcome.start.recent"_lang, &collapsed, ImVec2(), ImGuiChildFlags_AutoResizeX)) {
             if (!s_recentEntriesUpdating) {
                 for (auto it = s_recentEntries.begin(); it != s_recentEntries.end();) {
                     const auto &recentEntry = *it;
@@ -308,7 +321,7 @@ namespace hex::plugin::builtin::recent {
                     }
 
                     if (ImGui::BeginPopup(popupID.c_str())) {
-                        if (ImGui::MenuItem("hex.ui.common.remove"_lang)) {
+                        if (ImGui::MenuItemEx("hex.ui.common.remove"_lang, ICON_VS_REMOVE)) {
                             shouldRemove = true;
                         }
                         ImGui::EndPopup();
@@ -329,33 +342,38 @@ namespace hex::plugin::builtin::recent {
                         PopupAutoBackups::open();
                 }
             }
+
         }
         ImGuiExt::EndSubWindow();
     }
 
     void addMenuItems() {
+        #if defined(OS_WEB)
+            return;
+        #endif
+
         ContentRegistry::Interface::addMenuItemSubMenu({ "hex.builtin.menu.file" }, 1200, [] {
-            if (ImGui::BeginMenuEx("hex.builtin.menu.file.open_recent"_lang, ICON_VS_ARCHIVE, !recent::s_recentEntriesUpdating && !s_recentEntries.empty())) {
+            if (menu::beginMenuEx("hex.builtin.menu.file.open_recent"_lang, ICON_VS_ARCHIVE, !recent::s_recentEntriesUpdating && !s_recentEntries.empty())) {
                 // Copy to avoid changing list while iteration
                 auto recentEntries = s_recentEntries;
                 for (auto &recentEntry : recentEntries) {
-                    if (ImGui::MenuItem(recentEntry.displayName.c_str())) {
+                    if (menu::menuItem(recentEntry.displayName.c_str())) {
                         loadRecentEntry(recentEntry);
                     }
                 }
 
-                ImGui::Separator();
-                if (ImGui::MenuItem("hex.builtin.menu.file.clear_recent"_lang)) {
+                menu::menuSeparator();
+                if (menu::menuItem("hex.builtin.menu.file.clear_recent"_lang)) {
                     s_recentEntries.clear();
 
                     // Remove all recent files
-                    for (const auto &recentPath : fs::getDefaultPaths(fs::ImHexPath::Recent)) {
+                    for (const auto &recentPath : paths::Recent.write()) {
                         for (const auto &entry : std::fs::directory_iterator(recentPath))
                             std::fs::remove(entry.path());
                     }
                 }
 
-                ImGui::EndMenu();
+                menu::endMenu();
             }
         });
     }

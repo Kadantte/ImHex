@@ -1,6 +1,6 @@
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 #include <hex/ui/imgui_imhex_extensions.h>
 
 #include <hex/api/content_registry.hpp>
@@ -76,7 +76,7 @@ namespace hex::plugin::builtin {
 
                 // Draw banner
                 ImGui::SetCursorPos(scaled({ 25 * bannerSlideIn, 25 }));
-                const auto bannerSize = s_imhexBanner.getSize() / (1.5F * (1.0F / ImHexApi::System::getGlobalScale()));
+                const auto bannerSize = s_imhexBanner.getSize() / (3.0F * (1.0F / ImHexApi::System::getGlobalScale()));
                 ImGui::Image(
                     s_imhexBanner,
                     bannerSize,
@@ -269,8 +269,7 @@ namespace hex::plugin::builtin {
 
                         // Draw telemetry subwindow
                         ImGui::SetCursorPos((windowSize - subWindowSize) / 2);
-                        ImGuiExt::BeginSubWindow("hex.builtin.oobe.server_contact"_lang, subWindowSize, ImGuiChildFlags_AutoResizeY);
-                        {
+                        if (ImGuiExt::BeginSubWindow("hex.builtin.oobe.server_contact"_lang, nullptr, subWindowSize, ImGuiChildFlags_AutoResizeY)) {
                             // Draw telemetry information
                             auto yBegin = ImGui::GetCursorPosY();
                             std::string message = "hex.builtin.oobe.server_contact.text"_lang;
@@ -299,7 +298,7 @@ namespace hex::plugin::builtin {
                                     ImGui::TextUnformatted("hex.builtin.oobe.server_contact.data_collected.version"_lang);
                                     ImGui::TableNextColumn();
                                     ImGuiExt::TextFormattedWrapped("{}\n{}@{}\n{}",
-                                                                ImHexApi::System::getImHexVersion(),
+                                                                ImHexApi::System::getImHexVersion().get(),
                                                                 ImHexApi::System::getCommitHash(true),
                                                                 ImHexApi::System::getCommitBranch(),
                                                                 ImHexApi::System::isPortableVersion() ? "Portable" : "Installed"
@@ -309,11 +308,12 @@ namespace hex::plugin::builtin {
                                     ImGui::TableNextColumn();
                                     ImGui::TextUnformatted("hex.builtin.oobe.server_contact.data_collected.os"_lang);
                                     ImGui::TableNextColumn();
-                                    ImGuiExt::TextFormattedWrapped("{}\n{}\n{}\n{}",
+                                    ImGuiExt::TextFormattedWrapped("{}\n{}\n{}\n{}\nCorporate Environment: {}",
                                                                 ImHexApi::System::getOSName(),
                                                                 ImHexApi::System::getOSVersion(),
                                                                 ImHexApi::System::getArchitecture(),
-                                                                ImHexApi::System::getGPUVendor());
+                                                                ImHexApi::System::getGPUVendor(),
+                                                                ImHexApi::System::isCorporateEnvironment() ? "Yes" : "No");
 
                                     ImGui::EndTable();
                                 }
@@ -348,6 +348,8 @@ namespace hex::plugin::builtin {
                             // Draw deny button
                             ImGui::SetCursorPosX(buttonPos(2));
                             if (ImGui::Button("hex.ui.common.deny"_lang, buttonSize)) {
+                                ContentRegistry::Settings::write<int>("hex.builtin.setting.general", "hex.builtin.setting.general.server_contact", 0);
+                                ContentRegistry::Settings::write<int>("hex.builtin.setting.general", "hex.builtin.setting.general.upload_crash_logs", 0);
                                 page += 1;
                             }
 
@@ -406,6 +408,8 @@ namespace hex::plugin::builtin {
                 if (backgroundFadeOut >= 1.0F) {
                     if (tutorialEnabled) {
                         TutorialManager::startTutorial("hex.builtin.tutorial.introduction");
+                    } else {
+                        ContentRegistry::Settings::write<bool>("hex.builtin.setting.interface", "hex.builtin.setting.interface.achievement_popup", false);
                     }
 
                     TaskManager::doLater([] {
@@ -439,13 +443,13 @@ namespace hex::plugin::builtin {
             ImHexApi::System::setWindowResizable(false);
 
             const auto imageTheme = ThemeManager::getImageTheme();
-            s_imhexBanner    = ImGuiExt::Texture(romfs::get(hex::format("assets/{}/banner.png", imageTheme)).span<std::byte>());
-            s_compassTexture = ImGuiExt::Texture(romfs::get("assets/common/compass.png").span<std::byte>());
-            s_globeTexture   = ImGuiExt::Texture(romfs::get("assets/common/globe.png").span<std::byte>());
+            s_imhexBanner    = ImGuiExt::Texture::fromSVG(romfs::get(hex::format("assets/{}/banner.svg", imageTheme)).span<std::byte>());
+            s_compassTexture = ImGuiExt::Texture::fromImage(romfs::get("assets/common/compass.png").span<std::byte>());
+            s_globeTexture   = ImGuiExt::Texture::fromImage(romfs::get("assets/common/globe.png").span<std::byte>());
             s_screenshotDescriptions = nlohmann::json::parse(romfs::get("assets/screenshot_descriptions.json").string());
 
             for (const auto &path : romfs::list("assets/screenshots")) {
-                s_screenshots.emplace_back(path.filename(), ImGuiExt::Texture(romfs::get(path).span<std::byte>(), ImGuiExt::Texture::Filter::Linear));
+                s_screenshots.emplace_back(path.filename(), ImGuiExt::Texture::fromImage(romfs::get(path).span<std::byte>(), ImGuiExt::Texture::Filter::Linear));
             }
 
             s_drawEvent = EventFrameBegin::subscribe(drawOutOfBoxExperience);

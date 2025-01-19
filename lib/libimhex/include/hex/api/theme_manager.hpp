@@ -56,6 +56,7 @@ namespace hex {
          */
         static void addStyleHandler(const std::string &name, const StyleMap &styleMap);
 
+        static void reapplyCurrentTheme();
 
         static std::vector<std::string> getThemeNames();
         static const std::string &getImageTheme();
@@ -66,6 +67,7 @@ namespace hex {
 
         static void reset();
 
+        static void setAccentColor(const ImColor &color);
 
     public:
         struct ThemeHandler {
@@ -80,6 +82,7 @@ namespace hex {
 
         static const std::map<std::string, ThemeHandler>& getThemeHandlers();
         static const std::map<std::string, StyleHandler>& getStyleHandlers();
+
 
     private:
         ThemeManager() = default;

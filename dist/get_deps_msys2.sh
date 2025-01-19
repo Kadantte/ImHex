@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 
-pacman -S --needed --noconfirm pactoys
+pacman -S --needed --noconfirm pactoys unzip
 pacboy -S --needed --noconfirm  \
   gcc:p          \
   lld:p          \
@@ -17,4 +17,5 @@ pacboy -S --needed --noconfirm  \
   zlib:p         \
   bzip2:p        \
   xz:p           \
-  zstd:p
+  zstd:p         \
+  lz4:p

@@ -43,7 +43,7 @@ namespace hex::plugin::windows {
 
         ImGui::Combo(
             "hex.windows.view.tty_console.baud"_lang, &m_selectedBaudRate, [](void *data, int idx) {
-                hex::unused(data);
+                std::ignore = data;
 
                 return ViewTTYConsole::BaudRates[idx];
             },
@@ -52,7 +52,7 @@ namespace hex::plugin::windows {
 
         ImGui::Combo(
             "hex.windows.view.tty_console.num_bits"_lang, &m_selectedNumBits, [](void *data, int idx) {
-                hex::unused(data);
+                std::ignore = data;
 
                 return ViewTTYConsole::NumBits[idx];
             },
@@ -61,7 +61,7 @@ namespace hex::plugin::windows {
 
         ImGui::Combo(
             "hex.windows.view.tty_console.stop_bits"_lang, &m_selectedStopBits, [](void *data, int idx) {
-                hex::unused(data);
+                std::ignore = data;
 
                 return ViewTTYConsole::StopBits[idx];
             },
@@ -70,7 +70,7 @@ namespace hex::plugin::windows {
 
         ImGui::Combo(
             "hex.windows.view.tty_console.parity_bits"_lang, &m_selectedParityBits, [](void *data, int idx) {
-                hex::unused(data);
+                std::ignore = data;
 
                 return ViewTTYConsole::ParityBits[idx];
             },
@@ -146,7 +146,7 @@ namespace hex::plugin::windows {
         }
         ImGui::PopItemWidth();
 
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right) && ImGui::IsItemHovered() && m_portHandle != INVALID_HANDLE_VALUE && !m_transmitting)
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Right) && ImGui::IsItemHovered() && m_portHandle != INVALID_HANDLE_VALUE && !m_transmitting)
             ImGui::OpenPopup("ConsoleMenu");
 
         if (ImGui::BeginPopup("ConsoleMenu")) {
@@ -169,14 +169,14 @@ namespace hex::plugin::windows {
         }
     }
 
-    std::vector<std::pair<std::string, std::string>> ViewTTYConsole::getAvailablePorts() const {
-        std::vector<std::pair<std::string, std::string>> result;
-        std::vector<char> buffer(0xFFF, 0x00);
+    std::vector<std::pair<std::wstring, std::wstring>> ViewTTYConsole::getAvailablePorts() const {
+        std::vector<std::pair<std::wstring, std::wstring>> result;
+        std::vector<wchar_t> buffer(0xFFF, 0x00);
 
         for (u16 portNumber = 0; portNumber <= 255; portNumber++) {
-            std::string port = "COM" + std::to_string(portNumber);
+            std::wstring port = L"COM" + std::to_wstring(portNumber);
 
-            if (::QueryDosDevice(port.c_str(), buffer.data(), buffer.size()) != 0) {
+            if (::QueryDosDeviceW(port.c_str(), buffer.data(), buffer.size()) != 0) {
                 result.emplace_back(port, buffer.data());
             }
         }
@@ -189,7 +189,7 @@ namespace hex::plugin::windows {
             ui::ToastError::open("hex.windows.view.tty_console.no_available_port"_lang);
             return true;    // If false, connect_error error popup will override this error popup
         }
-        m_portHandle = ::CreateFile((R"(\\.\)" + m_comPorts[m_selectedPort].first).c_str(),
+        m_portHandle = ::CreateFileW((LR"(\\.\)" + m_comPorts[m_selectedPort].first).c_str(),
             GENERIC_READ | GENERIC_WRITE,
             0,
             nullptr,
@@ -299,7 +299,7 @@ namespace hex::plugin::windows {
         if (m_transmitting)
             return;
 
-        TaskManager::createBackgroundTask("Transmitting data", [&, this](auto&) {
+        TaskManager::createBackgroundTask("hex.windows.view.tty_console.task.transmitting"_lang, [&, this](auto&) {
             OVERLAPPED overlapped = { };
 
             overlapped.hEvent = ::CreateEvent(nullptr, true, false, nullptr);

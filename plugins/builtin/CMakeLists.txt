@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 include(ImHexPlugin)
 
 find_file(DEFAULT_MAGIC_FILE_PATH magic.mgc HINTS ${LIBMAGIC_INCLUDE_DIR}/../share/misc)
-if (DEFAULT_MAGIC_FILE_PATH)
+if (EXISTS ${DEFAULT_MAGIC_FILE_PATH})
     add_romfs_resource(${DEFAULT_MAGIC_FILE_PATH} always_auto_extract/magic/magic.mgc)
 endif ()
 
@@ -20,6 +20,7 @@ add_imhex_plugin(
         source/content/communication_interface.cpp
         source/content/data_inspector.cpp
         source/content/pl_builtin_functions.cpp
+        source/content/pl_builtin_types.cpp
         source/content/pl_pragmas.cpp
         source/content/settings_entries.cpp
         source/content/tools_entries.cpp
@@ -48,6 +49,8 @@ add_imhex_plugin(
         source/content/window_decoration.cpp
         source/content/data_information_sections.cpp
 
+        source/content/helpers/demangle.cpp
+
         source/content/data_processor_nodes/basic_nodes.cpp
         source/content/data_processor_nodes/control_nodes.cpp
         source/content/data_processor_nodes/decode_nodes.cpp
@@ -64,6 +67,7 @@ add_imhex_plugin(
         source/content/providers/memory_file_provider.cpp
         source/content/providers/process_memory_provider.cpp
         source/content/providers/base64_provider.cpp
+        source/content/providers/view_provider.cpp
 
         source/content/tools/ascii_table.cpp
         source/content/tools/base_converter.cpp

@@ -151,7 +151,7 @@ namespace hex {
             if (m_icon.isValid())
                 return m_icon;
 
-            m_icon = ImGuiExt::Texture(m_iconData.data(), m_iconData.size(), ImGuiExt::Texture::Filter::Linear);
+            m_icon = ImGuiExt::Texture::fromImage(m_iconData.data(), m_iconData.size(), ImGuiExt::Texture::Filter::Linear);
 
             return m_icon;
         }
@@ -295,6 +295,7 @@ namespace hex {
     };
 
     class AchievementManager {
+        static bool s_initialized;
     public:
         AchievementManager() = delete;
 

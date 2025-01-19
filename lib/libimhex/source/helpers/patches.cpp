@@ -28,7 +28,9 @@ namespace hex {
             void close() override { }
 
             void readRaw(u64 offset, void *buffer, size_t size) override {
-                hex::unused(offset, buffer, size);
+                std::ignore = offset;
+                std::ignore = buffer;
+                std::ignore = size;
             }
 
             void writeRaw(u64 offset, const void *buffer, size_t size) override {
@@ -44,7 +46,7 @@ namespace hex {
             }
 
             void resizeRaw(u64 newSize) override {
-                hex::unused(newSize);
+                std::ignore = newSize;
             }
 
             void insertRaw(u64 offset, u64 size) override {
@@ -79,7 +81,7 @@ namespace hex {
                 return "";
             }
 
-            [[nodiscard]] std::string getTypeName() const override { return ""; }
+            [[nodiscard]] UnlocalizedString getTypeName() const override { return ""; }
 
             const std::map<u64, u8>& getPatches() const {
                 return m_patches;
@@ -138,7 +140,7 @@ namespace hex {
                 result.push_back(addressBytes[2]);
                 result.push_back(addressBytes[1]);
                 result.push_back(addressBytes[0]);
-                pushBytesBack<u16>(result, changeEndianess<u16>(bytes.size(), std::endian::big));
+                pushBytesBack<u16>(result, changeEndianness<u16>(bytes.size(), std::endian::big));
 
                 for (auto byte : bytes)
                     result.push_back(byte);
@@ -189,7 +191,7 @@ namespace hex {
                 result.push_back(addressBytes[2]);
                 result.push_back(addressBytes[1]);
                 result.push_back(addressBytes[0]);
-                pushBytesBack<u16>(result, changeEndianess<u16>(bytes.size(), std::endian::big));
+                pushBytesBack<u16>(result, changeEndianness<u16>(bytes.size(), std::endian::big));
 
                 for (auto byte : bytes)
                     result.push_back(byte);

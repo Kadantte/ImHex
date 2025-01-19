@@ -16,17 +16,21 @@ namespace hex::plugin::builtin {
         void drawContent() override;
 
     private:
+        struct Bookmark {
+            ImHexApi::Bookmarks::Entry entry;
+            bool highlightVisible;
+        };
+
+    private:
+        void drawDropTarget(std::list<Bookmark>::iterator it, float height);
+
         bool importBookmarks(hex::prv::Provider *provider, const nlohmann::json &json);
         bool exportBookmarks(hex::prv::Provider *provider, nlohmann::json &json);
 
         void registerMenuItems();
+
     private:
         std::string m_currFilter;
-
-        struct Bookmark {
-            ImHexApi::Bookmarks::Entry entry;
-            TextEditor editor;
-        };
 
         PerProvider<std::list<Bookmark>> m_bookmarks;
         PerProvider<u64> m_currBookmarkId;

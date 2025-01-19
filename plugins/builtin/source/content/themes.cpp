@@ -1,16 +1,15 @@
 #include <hex/api/theme_manager.hpp>
+#include <hex/api/event_manager.hpp>
+
+#include <hex/ui/imgui_imhex_extensions.h>
+#include <hex/helpers/default_paths.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <implot.h>
-#include <hex/ui/imgui_imhex_extensions.h>
 #include <imnodes.h>
 #include <TextEditor.h>
 #include <romfs/romfs.hpp>
-
-#include <hex/helpers/fs.hpp>
-
-#include <hex/api/event_manager.hpp>
 
 #include <wolv/io/file.hpp>
 
@@ -55,9 +54,9 @@ namespace hex::plugin::builtin {
                     { "resize-grip-active",             ImGuiCol_ResizeGripActive       },
                     { "tab",                            ImGuiCol_Tab                    },
                     { "tab-hovered",                    ImGuiCol_TabHovered             },
-                    { "tab-active",                     ImGuiCol_TabActive              },
-                    { "tab-unfocused",                  ImGuiCol_TabUnfocused           },
-                    { "tab-unfocused-active",           ImGuiCol_TabUnfocusedActive     },
+                    { "tab-active",                     ImGuiCol_TabSelected            },
+                    { "tab-unfocused",                  ImGuiCol_TabDimmed              },
+                    { "tab-unfocused-active",           ImGuiCol_TabDimmedSelected      },
                     { "docking-preview",                ImGuiCol_DockingPreview         },
                     { "docking-empty-background",       ImGuiCol_DockingEmptyBg         },
                     { "plot-lines",                     ImGuiCol_PlotLines              },
@@ -71,7 +70,7 @@ namespace hex::plugin::builtin {
                     { "table-row-background-alt",       ImGuiCol_TableRowBgAlt          },
                     { "text-selected-background",       ImGuiCol_TextSelectedBg         },
                     { "drag-drop-target",               ImGuiCol_DragDropTarget         },
-                    { "nav-highlight",                  ImGuiCol_NavHighlight           },
+                    { "nav-highlight",                  ImGuiCol_NavCursor              },
                     { "nav-windowing-highlight",        ImGuiCol_NavWindowingHighlight  },
                     { "nav-windowing-background",       ImGuiCol_NavWindowingDimBg      },
                     { "modal-window-dim-background",    ImGuiCol_ModalWindowDimBg       },
@@ -354,6 +353,7 @@ namespace hex::plugin::builtin {
                 auto &style = ImGuiExt::GetCustomStyle();
                 const static ThemeManager::StyleMap ImHexStyleMap = {
                         { "window-blur",    { &style.WindowBlur,    0.0F,   1.0F,   true } },
+                        { "popup-alpha",            { &style.PopupWindowAlpha,          0.0F,   1.0F,    false } },
                 };
 
                 ThemeManager::addStyleHandler("imhex", ImHexStyleMap);
@@ -368,7 +368,7 @@ namespace hex::plugin::builtin {
         }
 
         // Load user themes
-        for (const auto &themeFolder : fs::getDefaultPaths(fs::ImHexPath::Themes)) {
+        for (const auto &themeFolder : paths::Themes.read()) {
             for (const auto &theme : std::fs::directory_iterator(themeFolder)) {
                 if (theme.is_regular_file())
                     ThemeManager::addTheme(wolv::io::File(theme.path(), wolv::io::File::Mode::Read).readString());

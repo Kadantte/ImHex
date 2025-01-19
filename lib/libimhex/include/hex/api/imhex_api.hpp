@@ -2,12 +2,15 @@
 
 #include <hex.hpp>
 #include <hex/api/localization_manager.hpp>
+#include <hex/helpers/semantic_version.hpp>
 
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 
 #include <wolv/io/fs.hpp>
 
@@ -73,7 +76,7 @@ namespace hex {
             namespace impl {
 
                 using HighlightingFunction = std::function<std::optional<color_t>(u64, const u8*, size_t, bool)>;
-                using HoveringFunction = std::function<bool(const prv::Provider *, u64, const u8*, size_t)>;
+                using HoveringFunction = std::function<std::set<Region>(const prv::Provider *, u64, size_t)>;
 
                 const std::map<u32, Highlighting>& getBackgroundHighlights();
                 const std::map<u32, HighlightingFunction>& getBackgroundHighlightingFunctions();
@@ -291,7 +294,7 @@ namespace hex {
             namespace impl {
 
                 void resetClosingProvider();
-                const std::vector<prv::Provider*>& getClosingProviders();
+                std::set<prv::Provider*> getClosingProviders();
 
             }
 
@@ -432,6 +435,7 @@ namespace hex {
                 void setInitialWindowProperties(InitialWindowProperties properties);
 
                 void setGPUVendor(const std::string &vendor);
+                void setGLRenderer(const std::string &renderer);
 
                 void addInitArgument(const std::string &key, const std::string &value = { });
 
@@ -489,6 +493,7 @@ namespace hex {
              */
             float getNativeScale();
 
+            float getBackingScaleFactor();
 
             /**
              * @brief Gets the current main window position
@@ -572,6 +577,20 @@ namespace hex {
             const std::string& getGPUVendor();
 
             /**
+             * @brief Gets the current GPU vendor
+             * @return The current GPU vendor
+             */
+            const std::string& getGLRenderer();
+
+            /**
+             * @brief Checks if ImHex is being run in a "Corporate Environment"
+             * This function simply checks for common telltale signs such as if the machine is joined a
+             * domain. It's not super accurate, but it's still useful for statistics
+             * @return True if it is
+             */
+            bool isCorporateEnvironment();
+
+            /**
              * @brief Checks if ImHex is running in portable mode
              * @return Whether ImHex is running in portable mode
              */
@@ -595,11 +614,21 @@ namespace hex {
              */
             std::string getArchitecture();
 
+
+            struct LinuxDistro {
+                std::string name;
+                std::string version;
+            };
+            /**
+             * @brief Gets information related to the Linux distribution, if running on Linux
+             */
+            std::optional<LinuxDistro> getLinuxDistro();
+
             /**
              * @brief Gets the current ImHex version
              * @return ImHex version
              */
-            std::string getImHexVersion(bool withBuildType = true);
+            SemanticVersion getImHexVersion();
 
             /**
              * @brief Gets the current git commit hash
@@ -619,6 +648,12 @@ namespace hex {
              * @return True if ImHex was built in debug mode, false otherwise
              */
             bool isDebugBuild();
+
+            /**
+             * @brief Checks if this version of ImHex is a nightly build
+             * @return True if this version is a nightly, false if it's a release
+             */
+            bool isNightlyBuild();
 
             enum class UpdateType {
                 Stable,
@@ -664,6 +699,19 @@ namespace hex {
              */
             std::optional<InitialWindowProperties> getInitialWindowProperties();
 
+            /**
+             * @brief Gets the module handle of libimhex
+             * @return Module handle
+             */
+            void* getLibImHexModuleHandle();
+
+            /**
+             * Adds a new migration routine that will be executed when upgrading from a lower version than specified in migrationVersion
+             * @param migrationVersion Upgrade point version
+             * @param function Function to run
+             */
+            void addMigrationRoutine(SemanticVersion migrationVersion, std::function<void()> function);
+
         }
 
         /**
@@ -698,17 +746,15 @@ namespace hex {
                 std::vector<GlyphRange> glyphRanges;
                 Offset offset;
                 u32 flags;
+                std::optional<u32> defaultSize;
             };
 
             namespace impl {
 
                 const std::vector<Font>& getFonts();
 
-                void setCustomFontPath(const std::fs::path &path);
-                void setFontSize(float size);
-                void setFontAtlas(ImFontAtlas *fontAtlas);
+                std::map<UnlocalizedString, ImFont*>& getFontDefinitions();
 
-                void setFonts(ImFont *bold, ImFont *italic);
             }
 
             GlyphRange glyph(const char *glyph);
@@ -716,31 +762,13 @@ namespace hex {
             GlyphRange range(const char *glyphBegin, const char *glyphEnd);
             GlyphRange range(u32 codepointBegin, u32 codepointEnd);
 
-            void loadFont(const std::fs::path &path, const std::vector<GlyphRange> &glyphRanges = {}, Offset offset = {}, u32 flags = 0);
-            void loadFont(const std::string &name, const std::span<const u8> &data, const std::vector<GlyphRange> &glyphRanges = {}, Offset offset = {}, u32 flags = 0);
+            void loadFont(const std::fs::path &path, const std::vector<GlyphRange> &glyphRanges = {}, Offset offset = {}, u32 flags = 0, std::optional<u32> defaultSize = std::nullopt);
+            void loadFont(const std::string &name, const std::span<const u8> &data, const std::vector<GlyphRange> &glyphRanges = {}, Offset offset = {}, u32 flags = 0, std::optional<u32> defaultSize = std::nullopt);
 
             constexpr static float DefaultFontSize = 13.0;
 
-            ImFont* Bold();
-            ImFont* Italic();
-
-            /**
-             * @brief Gets the current custom font path
-             * @return The current custom font path
-             */
-            const std::filesystem::path& getCustomFontPath();
-
-            /**
-             * @brief Gets the current font size
-             * @return The current font size
-             */
-            float getFontSize();
-
-            /**
-             * @brief Gets the current font atlas
-             * @return Current font atlas
-             */
-            ImFontAtlas* getFontAtlas();
+            void registerFont(const UnlocalizedString &fontName);
+            ImFont* getFont(const UnlocalizedString &fontName);
 
         }
 

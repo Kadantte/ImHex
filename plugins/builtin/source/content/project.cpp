@@ -8,6 +8,7 @@
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
+#include <hex/api/content_registry.hpp>
 #include <hex/api/event_manager.hpp>
 
 #include <hex/providers/provider.hpp>
@@ -157,7 +158,7 @@ namespace hex::plugin::builtin {
         }
 
         {
-            const auto metadataContent = hex::format("{}\n{}", MetadataHeaderMagic, ImHexApi::System::getImHexVersion());
+            const auto metadataContent = hex::format("{}\n{}", MetadataHeaderMagic, ImHexApi::System::getImHexVersion().get(false));
             tar.writeString(MetadataPath, metadataContent);
         }
 
@@ -177,6 +178,6 @@ namespace hex::plugin::builtin {
     }
 
     void registerProjectHandlers() {
-        hex::ProjectFile::setProjectFunctions(load, store);    
+        hex::ProjectFile::setProjectFunctions(load, store);
     }
 }

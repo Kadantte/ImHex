@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 #include <hex/api/task_manager.hpp>
+#include <hex/helpers/default_paths.hpp>
 #include <hex/ui/imgui_imhex_extensions.h>
 
 #include <content/yara_rule.hpp>
@@ -25,7 +26,7 @@ namespace hex::plugin::yara {
         };
 
         void process(Task &task, prv::Provider *provider, Region region) override {
-            for (const auto &yaraSignaturePath : fs::getDefaultPaths(fs::ImHexPath::YaraAdvancedAnalysis)) {
+            for (const auto &yaraSignaturePath : paths::YaraAdvancedAnalysis.read()) {
                 for (const auto &ruleFilePath : std::fs::recursive_directory_iterator(yaraSignaturePath)) {
                     wolv::io::File file(ruleFilePath.path(), wolv::io::File::Mode::Read);
                     if (!file.isValid())
@@ -57,7 +58,7 @@ namespace hex::plugin::yara {
         }
 
         void drawContent() override {
-            const auto empty = std::ranges::any_of(m_categories, [](const auto &entry) {
+            const auto empty = !std::ranges::any_of(m_categories, [](const auto &entry) {
                 const auto &[categoryName, category] = entry;
                 return !category.matchedRules.empty();
             });
@@ -74,14 +75,14 @@ namespace hex::plugin::yara {
                             continue;
 
                         ImGui::TableNextColumn();
-                        ImGuiExt::BeginSubWindow(categoryName.c_str());
-                        {
+                        if (ImGuiExt::BeginSubWindow(categoryName.c_str())) {
                             for (const auto &match : category.matchedRules) {
                                 const auto &ruleName = match.metadata.contains("name") ? match.metadata.at("name") : match.identifier;
-                                ImGui::TextUnformatted(ruleName.c_str());
+                                ImGuiExt::TextFormattedSelectable("{}", ruleName);
                             }
                         }
                         ImGuiExt::EndSubWindow();
+
                     }
 
                     ImGui::EndTable();

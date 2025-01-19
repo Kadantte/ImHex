@@ -1,5 +1,7 @@
+%define source_date_epoch_from_changelog 0
+
 Name:           imhex
-Version:        1.26.2
+Version:        VERSION
 Release:        0%{?dist}
 Summary:        A hex editor for reverse engineers and programmers
 
@@ -14,6 +16,7 @@ BuildRequires:  cmake
 BuildRequires:  desktop-file-utils
 BuildRequires:  dbus-devel
 BuildRequires:  file-devel
+BuildRequires:  fontconfig-devel
 BuildRequires:  freetype-devel
 BuildRequires:  fmt-devel
 BuildRequires:  gcc-c++
@@ -32,7 +35,7 @@ BuildRequires:  zlib-devel
 BuildRequires:  bzip2-devel
 BuildRequires:  xz-devel
 %if 0%{?rhel}
-BuildRequires:  gcc-toolset-12
+BuildRequires:  gcc-toolset-14
 %endif
 
 Provides:       bundled(gnulib)
@@ -68,9 +71,9 @@ rm -rf lib/third_party/{fmt,nlohmann_json,yara}
 
 %build
 %if 0%{?rhel}
-. /opt/rh/gcc-toolset-12/enable
+. /opt/rh/gcc-toolset-14/enable
 %set_build_flags
-CXXFLAGS+=" -std=gnu++2b"
+CXXFLAGS+=" -std=gnu++23"
 %endif
 %cmake \
  -D CMAKE_BUILD_TYPE=Release             \
@@ -91,9 +94,9 @@ CXXFLAGS+=" -std=gnu++2b"
 
 %check
 %if 0%{?rhel}
-. /opt/rh/gcc-toolset-12/enable
+. /opt/rh/gcc-toolset-14/enable
 %set_build_flags
-CXXFLAGS+=" -std=gnu++2b"
+CXXFLAGS+=" -std=gnu++23"
 %endif
 
 
@@ -120,11 +123,11 @@ cp -a lib/third_party/xdgpp/LICENSE                                  %{buildroot
 %doc README.md
 %{_bindir}/imhex
 %{_bindir}/imhex-updater
-%{_datadir}/pixmaps/%{name}.png
+%{_datadir}/pixmaps/%{name}.svg
 %{_datadir}/applications/%{name}.desktop
+%{_datadir}/mime/packages/%{name}.xml
 %{_libdir}/libimhex.so*
 %{_libdir}/%{name}/
+%{_libdir}/*.hexpluglib
+/usr/lib/debug/%{_libdir}/*.debug
 %{_metainfodir}/net.werwolv.%{name}.metainfo.xml
-
-
-%changelog

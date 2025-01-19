@@ -29,6 +29,10 @@ add_subdirectory_if_exists(lib/third_party/nlohmann_json)
 set(NLOHMANN_JSON_LIBRARIES nlohmann_json PARENT_SCOPE)
 set(NLOHMANN_JSON_LIBRARIES nlohmann_json)
 
+add_subdirectory_if_exists(lib/third_party/boost)
+set(BOOST_LIBRARIES boost::regex PARENT_SCOPE)
+set(BOOST_LIBRARIES boost::regex)
+
 add_subdirectory(lib/external/libwolv EXCLUDE_FROM_ALL)
 
 set(LIBPL_ENABLE_CLI OFF CACHE BOOL "" FORCE)

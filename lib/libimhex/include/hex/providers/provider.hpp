@@ -30,6 +30,7 @@ namespace hex::prv {
 
         struct MenuEntry {
             std::string name;
+            const char *icon;
             std::function<void()> callback;
         };
 
@@ -148,10 +149,10 @@ namespace hex::prv {
          * @brief Gets the type name of this provider
          * @note This is mainly used to be stored in project files and recents to be able to later on
          * recreate this exact provider type. This needs to be unique across all providers, this is usually something
-         * like "hex.builtin.provider.memory" or "hex.builtin.provider.file"
+         * like "hex.builtin.provider.mem_file" or "hex.builtin.provider.file"
          * @return The provider's type name
          */
-        [[nodiscard]] virtual std::string getTypeName() const = 0;
+        [[nodiscard]] virtual UnlocalizedString getTypeName() const = 0;
 
         /**
          * @brief Gets a human readable representation of the current provider
@@ -165,7 +166,7 @@ namespace hex::prv {
         void insert(u64 offset, u64 size);
         void remove(u64 offset, u64 size);
 
-        virtual void resizeRaw(u64 newSize) { hex::unused(newSize); }
+        virtual void resizeRaw(u64 newSize) { std::ignore = newSize; }
         virtual void insertRaw(u64 offset, u64 size);
         virtual void removeRaw(u64 offset, u64 size);
 
@@ -258,7 +259,7 @@ namespace hex::prv {
          */
         bool m_skipLoadInterface = false;
 
-        std::string m_errorMessage;
+        std::string m_errorMessage = "Unspecified error";
 
         u64 m_pageSize = MaxPageSize;
     };

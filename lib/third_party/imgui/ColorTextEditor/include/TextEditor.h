@@ -4,11 +4,13 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <functional>
 #include <unordered_set>
 #include <unordered_map>
 #include <map>
 #include <regex>
 #include "imgui.h"
+#include "imgui_internal.h"
 
 class TextEditor
 {
@@ -74,8 +76,8 @@ public:
 		Coordinates() : mLine(0), mColumn(0) {}
 		Coordinates(int aLine, int aColumn) : mLine(aLine), mColumn(aColumn)
 		{
-			assert(aLine >= 0);
-			assert(aColumn >= 0);
+			IM_ASSERT(aLine >= 0);
+			IM_ASSERT(aColumn >= 0);
 		}
 		static Coordinates Invalid() { static Coordinates invalid(-1, -1); return invalid; }
 
@@ -128,15 +130,86 @@ public:
 		std::string mDeclaration;
 	};
 
-	typedef std::string String;
-	typedef std::unordered_map<std::string, Identifier> Identifiers;
-	typedef std::unordered_set<std::string> Keywords;
-	typedef std::map<int, std::string> ErrorMarkers;
-	typedef std::unordered_set<int> Breakpoints;
-	typedef std::array<ImU32, (unsigned)PaletteIndex::Max> Palette;
-	typedef uint8_t Char;
+    using String = std::string;
+	using Identifiers = std::unordered_map<std::string, Identifier>;
+	using Keywords = std::unordered_set<std::string> ;
+    using ErrorMarkers = std::map<Coordinates, std::pair<uint32_t ,std::string>>;
+    using Breakpoints = std::unordered_set<uint32_t>;
+    using Palette = std::array<ImU32, (uint32_t)PaletteIndex::Max>;
+    using Char = uint8_t ;
 
-	struct Glyph
+    class ActionableBox {
+
+        ImRect mBox;
+    public:
+        ActionableBox()=default;
+        explicit ActionableBox(const ImRect &box) : mBox(box) {}
+        virtual bool trigger() {
+            return ImGui::IsMouseHoveringRect(mBox.Min,mBox.Max);
+        }
+
+        virtual void callback() {}
+    };
+
+    class CursorChangeBox : public ActionableBox {
+    public:
+        CursorChangeBox()=default;
+        explicit CursorChangeBox(const ImRect &box) : ActionableBox(box) {
+
+        }
+
+        void callback() override {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        }
+    };
+
+    class ErrorGotoBox : public ActionableBox {
+        Coordinates mPos;
+    public:
+        ErrorGotoBox()=default;
+        ErrorGotoBox(const ImRect &box, const Coordinates &pos, TextEditor *editor) : ActionableBox(box), mPos(pos), mEditor(editor) {
+
+        }
+
+        bool trigger() override {
+            return ActionableBox::trigger() && ImGui::IsMouseClicked(0);
+        }
+
+        void callback() override {
+            mEditor->JumpToCoords(mPos);
+        }
+
+    private:
+        TextEditor *mEditor;
+    };
+
+    using ErrorGotoBoxes = std::map<Coordinates, ErrorGotoBox>;
+    using CursorBoxes = std::map<Coordinates, CursorChangeBox>;
+
+    class ErrorHoverBox : public ActionableBox {
+        Coordinates mPos;
+        std::string mErrorText;
+    public:
+        ErrorHoverBox()=default;
+        ErrorHoverBox(const ImRect &box, const Coordinates &pos,const char *errorText) : ActionableBox(box), mPos(pos), mErrorText(errorText) {
+
+        }
+
+        void callback() override {
+            ImGui::BeginTooltip();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+            ImGui::Text("Error at line %d:", mPos.mLine);
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.2f, 1.0f));
+            ImGui::TextUnformatted(mErrorText.c_str());
+            ImGui::PopStyleColor();
+            ImGui::EndTooltip();
+        }
+    };
+    using ErrorHoverBoxes = std::map<Coordinates, ErrorHoverBox>;
+
+    struct Glyph
 	{
 		Char mChar;
 		PaletteIndex mColorIndex = PaletteIndex::Default;
@@ -175,7 +248,7 @@ public:
 		bool mCaseSensitive;
 
 		LanguageDefinition()
-			:  mGlobalDocComment("/*!"), mDocComment("/**"), mPreprocChar('#'), mAutoIndentation(true), mTokenize(nullptr), mCaseSensitive(true)
+			: mPreprocChar('#'), mAutoIndentation(true), mTokenize(nullptr), mCaseSensitive(true)
 		{
 		}
 
@@ -187,6 +260,28 @@ public:
 		static const LanguageDefinition& AngelScript();
 		static const LanguageDefinition& Lua();
 	};
+    void ClearErrorMarkers() {
+        mErrorMarkers.clear();
+        mErrorHoverBoxes.clear();
+    }
+
+    void ClearGotoBoxes() {
+        mErrorGotoBoxes.clear();
+    }
+
+    void ClearCursorBoxes() {
+        mCursorBoxes.clear();
+    }
+    void ClearActionables() {
+        ClearErrorMarkers();
+        ClearGotoBoxes();
+        ClearCursorBoxes();
+    }
+
+    struct Selection {
+        Coordinates mStart;
+        Coordinates mEnd;
+    };
 
 	TextEditor();
 	~TextEditor();
@@ -198,28 +293,68 @@ public:
 	static void SetPalette(const Palette& aValue);
 
 	void SetErrorMarkers(const ErrorMarkers& aMarkers) { mErrorMarkers = aMarkers; }
+    Breakpoints &GetBreakpoints() { return mBreakpoints; }
 	void SetBreakpoints(const Breakpoints& aMarkers) { mBreakpoints = aMarkers; }
+    ImVec2 Underwaves( ImVec2 pos, uint32_t nChars, ImColor color= ImGui::GetStyleColorVec4(ImGuiCol_Text), const ImVec2 &size_arg= ImVec2(0, 0));
 
 	void Render(const char* aTitle, const ImVec2& aSize = ImVec2(), bool aBorder = false);
 	void SetText(const std::string& aText);
+    void JumpToLine(int line);
+    void JumpToCoords(const Coordinates &coords);
 	std::string GetText() const;
-
+    bool isEmpty() const {
+        auto text = GetText();
+        return text.empty() || text == "\n";
+    }
+    void SetTopLine();
+    void SetScrollY();
 	void SetTextLines(const std::vector<std::string>& aLines);
 	std::vector<std::string> GetTextLines() const;
 
 	std::string GetSelectedText() const;
 	std::string GetCurrentLineText()const;
+
+    std::string GetLineText(int line)const;
+    void SetSourceCodeEditor(TextEditor *editor) { mSourceCodeEditor = editor; }
+    TextEditor *GetSourceCodeEditor() {
+        if(mSourceCodeEditor!=nullptr)
+            return mSourceCodeEditor;
+        return this;
+    }
+
     class FindReplaceHandler;
 
 public:
+    void AddClickableText(std::string text) {
+        mClickableText.push_back(text);
+    }
+    void ClearClickableText() {
+        mClickableText.clear();
+    }
     FindReplaceHandler *GetFindReplaceHandler() { return &mFindReplaceHandler; }
 	int GetTotalLines() const { return (int)mLines.size(); }
 	bool IsOverwrite() const { return mOverwrite; }
+    void SetTopMarginChanged(int newMargin) {
+        mNewTopMargin = newMargin;
+        mTopMarginChanged = true;
+    }
+    void setFocusAtCoords(const Coordinates &coords) {
+        mFocusAtCoords = coords;
+        mUpdateFocus = true;
+    }
+    void SetOverwrite(bool aValue) { mOverwrite = aValue; }
+
+    std::string ReplaceStrings(std::string string, const std::string &search, const std::string &replace);
+    std::vector<std::string> SplitString(const std::string &string, const std::string &delimiter, bool removeEmpty);
+    std::string ReplaceTabsWithSpaces(const std::string& string, uint32_t tabSize);
+    std::string PreprocessText(const std::string &code);
 
 	void SetReadOnly(bool aValue);
 	bool IsReadOnly() const { return mReadOnly; }
 	bool IsTextChanged() const { return mTextChanged; }
 	bool IsCursorPositionChanged() const { return mCursorPositionChanged; }
+    bool IsBreakpointsChanged() const { return mBreakPointsChanged; }
+    void ClearBreakpointsChanged() { mBreakPointsChanged = false; }
 
     void SetShowCursor(bool aValue) { mShowCursor = aValue; }
     void SetShowLineNumbers(bool aValue) { mShowLineNumbers = aValue; }
@@ -229,6 +364,9 @@ public:
 
 	Coordinates GetCursorPosition() const { return GetActualCursorCoordinates(); }
 	void SetCursorPosition(const Coordinates& aPosition);
+
+    bool RaiseContextMenu() { return mRaiseContextMenu; }
+    void ClearRaiseContextMenu() { mRaiseContextMenu = false; }
 
 	inline void SetHandleMouseInputs    (bool aValue){ mHandleMouseInputs    = aValue;}
 	inline bool IsHandleMouseInputsEnabled() const { return mHandleKeyboardInputs; }
@@ -260,6 +398,7 @@ public:
 	void SetSelectionStart(const Coordinates& aPosition);
 	void SetSelectionEnd(const Coordinates& aPosition);
 	void SetSelection(const Coordinates& aStart, const Coordinates& aEnd, SelectionMode aMode = SelectionMode::Normal);
+    Selection GetSelection() const;
 	void SelectWordUnderCursor();
 	void SelectAll();
 	bool HasSelection() const;
@@ -268,13 +407,18 @@ public:
 	void Cut();
 	void Paste();
 	void Delete();
+    float GetPageSize() const;
 
 	ImVec2 &GetCharAdvance() { return mCharAdvance; }
 
-	bool CanUndo() const;
+	bool CanUndo();
 	bool CanRedo() const;
 	void Undo(int aSteps = 1);
 	void Redo(int aSteps = 1);
+
+    void DeleteWordLeft();
+    void DeleteWordRight();
+    void Backspace();
 
 	static const Palette& GetDarkPalette();
 	static const Palette& GetLightPalette();
@@ -297,7 +441,7 @@ public:
         FindReplaceHandler();
         typedef std::vector<EditorState> Matches;
         Matches &GetMatches() { return mMatches; }
-        bool FindNext(TextEditor *editor,bool wrapAround);
+        bool FindNext(TextEditor *editor);
         unsigned FindMatch(TextEditor *editor,bool isNex);
         bool Replace(TextEditor *editor,bool right);
         bool ReplaceAll(TextEditor *editor);
@@ -400,7 +544,6 @@ private:
 	void ColorizeInternal();
 	float TextDistanceToLineStart(const Coordinates& aFrom) const;
 	void EnsureCursorVisible();
-	int GetPageSize() const;
 	std::string GetText(const Coordinates& aStart, const Coordinates& aEnd) const;
 	Coordinates GetActualCursorCoordinates() const;
 	Coordinates SanitizeCoordinates(const Coordinates& aValue) const;
@@ -412,10 +555,13 @@ private:
 	Coordinates FindWordStart(const Coordinates& aFrom) const;
 	Coordinates FindWordEnd(const Coordinates& aFrom) const;
 	Coordinates FindNextWord(const Coordinates& aFrom) const;
+    Coordinates StringIndexToCoordinates(int aIndex, const std::string &str) const;
 	int GetCharacterIndex(const Coordinates& aCoordinates) const;
 	int GetCharacterColumn(int aLine, int aIndex) const;
 	int GetLineCharacterCount(int aLine) const;
-	unsigned long long GetLineByteCount(int aLine) const;
+    int Utf8CharsToBytes(const Coordinates &aCoordinates) const;
+    int GetLongestLineLength() const;
+    unsigned long long GetLineByteCount(int aLine) const;
 	int GetStringCharacterCount(std::string str) const;
 	int GetLineMaxColumn(int aLine) const;
 	bool IsOnWordBoundary(const Coordinates& aAt) const;
@@ -423,58 +569,82 @@ private:
 	void RemoveLine(int aIndex);
 	Line& InsertLine(int aIndex);
 	void EnterCharacter(ImWchar aChar, bool aShift);
-	void Backspace();
 	void DeleteSelection();
 	std::string GetWordUnderCursor() const;
 	std::string GetWordAt(const Coordinates& aCoords) const;
 	ImU32 GetGlyphColor(const Glyph& aGlyph) const;
+    void ResetCursorBlinkTime();
 
 	void HandleKeyboardInputs();
 	void HandleMouseInputs();
-	void Render();
+	void RenderText(const char *aTitle, const ImVec2 &lineNumbersStartPos, const ImVec2 &textEditorSize);
 
-	float mLineSpacing;
+	float mLineSpacing = 1.0F;
 	Lines mLines;
-	EditorState mState;
+	EditorState mState = {};
 	UndoBuffer mUndoBuffer;
-	int mUndoIndex;
-    bool mScrollToBottom;
-    float mTopMargin;
+	int mUndoIndex = 0;
+    bool mScrollToBottom = false;
+    float mTopMargin = 0.0F;
+    float mNewTopMargin = 0.0F;
+    float mOldTopMargin = 0.0F;
+    bool mTopMarginChanged = false;
 
-	int mTabSize;
-	bool mOverwrite;
-	bool mReadOnly;
-	bool mWithinRender;
-	bool mScrollToCursor;
-	bool mScrollToTop;
-	bool mTextChanged;
-	bool mColorizerEnabled;
-	float mTextStart;                   // position (in pixels) where a code line starts relative to the left of the TextEditor.
-	int  mLeftMargin;
-	bool mCursorPositionChanged;
-	int mColorRangeMin, mColorRangeMax;
-	SelectionMode mSelectionMode;
-	bool mHandleKeyboardInputs;
-	bool mHandleMouseInputs;
-	bool mIgnoreImGuiChild;
-	bool mShowWhitespaces;
+	int mTabSize = 4;
+	bool mOverwrite = false;
+	bool mReadOnly = false;
+	bool mWithinRender = false;
+	bool mScrollToCursor = false;
+	bool mScrollToTop = false;
+	bool mTextChanged = false;
+	bool mColorizerEnabled = true;
+    float mLineNumberFieldWidth = 0.0F;
+    float mLongest = 0.0F;
+	float mTextStart = 20.0F;                   // position (in pixels) where a code line starts relative to the left of the TextEditor.
+	float  mLeftMargin = 10.0;
+    float mTopLine = 0.0F;
+    bool mSetTopLine = false;
+	bool mCursorPositionChanged = false;
+    bool mBreakPointsChanged = false;
+	int mColorRangeMin = 0, mColorRangeMax = 0;
+	SelectionMode mSelectionMode = SelectionMode::Normal;
+	bool mHandleKeyboardInputs = true;
+	bool mHandleMouseInputs = true;
+	bool mIgnoreImGuiChild = false;
+	bool mShowWhitespaces = true;
 
 	static Palette sPaletteBase;
-	Palette mPalette;
-	LanguageDefinition mLanguageDefinition;
+	Palette mPalette = {};
+	LanguageDefinition mLanguageDefinition = {};
 	RegexList mRegexList;
-    bool mCheckComments;
-	Breakpoints mBreakpoints;
-	ErrorMarkers mErrorMarkers;
-	ImVec2 mCharAdvance;
-	Coordinates mInteractiveStart, mInteractiveEnd;
+    bool mCheckComments = true;
+	Breakpoints mBreakpoints = {};
+	ErrorMarkers mErrorMarkers = {};
+    ErrorHoverBoxes mErrorHoverBoxes = {};
+    ErrorGotoBoxes mErrorGotoBoxes = {};
+    CursorBoxes mCursorBoxes = {};
+	ImVec2 mCharAdvance = {};
+	Coordinates mInteractiveStart = {}, mInteractiveEnd = {};
 	std::string mLineBuffer;
-	uint64_t mStartTime;
+	uint64_t mStartTime = 0;
 	std::vector<std::string> mDefines;
+    TextEditor *mSourceCodeEditor = nullptr;
+    float mShiftedScrollY = 0;
+    float mScrollY = 0;
+    float mScrollYIncrement = 0.0F;
+    bool mSetScrollY = false;
+    float mNumberOfLinesDisplayed = 0;
+	float mLastClick = -1.0F;
+    bool mShowCursor = true;
+    bool mShowLineNumbers = true;
+    bool mRaiseContextMenu = false;
+    Coordinates mFocusAtCoords = {};
+    bool mUpdateFocus = false;
 
-	float mLastClick;
-    bool mShowCursor;
-    bool mShowLineNumbers;
+    std::vector<std::string>  mClickableText;
+
+    static const int sCursorBlinkInterval;
+    static const int sCursorBlinkOnTime;
 };
 
 bool TokenizeCStyleString(const char * in_begin, const char * in_end, const char *& out_begin, const char *& out_end);

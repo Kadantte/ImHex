@@ -15,11 +15,12 @@ namespace hex::subcommands {
     std::optional<SubCommand> findSubCommand(const std::string &arg) {
         for (auto &plugin : PluginManager::getPlugins()) {
             for (auto &subCommand : plugin.getSubCommands()) {
-                if (hex::format("--{}", subCommand.commandKey) == arg) {
+                if (hex::format("--{}", subCommand.commandLong) == arg || hex::format("-{}", subCommand.commandShort) == arg) {
                     return subCommand;
                 }
             }
         }
+
         return std::nullopt;
     }
 
@@ -27,7 +28,8 @@ namespace hex::subcommands {
         // If no arguments, do not even try to process arguments
         // (important because this function will exit ImHex if an instance is already opened,
         // and we don't want that if no arguments were provided)
-        if (args.empty()) return;
+        if (args.empty())
+            return;
 
         std::vector<std::pair<SubCommand, std::vector<std::string>>> subCommands;
 
@@ -76,18 +78,18 @@ namespace hex::subcommands {
         }
 
         // Save last command to run
-        if (currentSubCommand) {
+        if (currentSubCommand.has_value()) {
             subCommands.emplace_back(*currentSubCommand, currentSubCommandArgs);
         }
 
         // Run the subcommands
-        for (auto& subCommandPair : subCommands) {
-            subCommandPair.first.callback(subCommandPair.second);
+        for (auto &[subcommand, args] : subCommands) {
+            subcommand.callback(args);
         }
 
-        // Exit the process if its not the main instance (the commands have been forwarded to another instance)
+        // Exit the process if it's not the main instance (the commands have been forwarded to another instance)
         if (!ImHexApi::System::isMainInstance()) {
-            exit(0);
+            std::exit(0);
         }
     }
 
@@ -95,12 +97,15 @@ namespace hex::subcommands {
         log::debug("Forwarding subcommand {} (maybe to us)", cmdName);
 
         std::vector<u8> data;
-        for (const auto &arg: args) {
-            data.insert(data.end(), arg.begin(), arg.end());
-            data.push_back('\0');
+        if (!args.empty()) {
+            for (const auto &arg: args) {
+                data.insert(data.end(), arg.begin(), arg.end());
+                data.push_back('\0');
+            }
+
+            data.pop_back();
         }
-        data.erase(data.end()-1);
-        
+
         SendMessageToMainInstance::post(hex::format("command/{}", cmdName), data);
     }
 
@@ -112,8 +117,8 @@ namespace hex::subcommands {
 
             std::vector<std::string> args;
 
-            for (const auto &arg_view : std::views::split(string, char(0x00))) {
-                std::string arg(arg_view.data(), arg_view.size());
+            for (const auto &argument : std::views::split(string, char(0x00))) {
+                std::string arg(argument.data(), argument.size());
                 args.push_back(arg);
             }
 

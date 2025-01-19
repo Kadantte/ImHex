@@ -1,14 +1,16 @@
 <a href="https://imhex.werwolv.net">
   <h1 align="center">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="./resources/projects/logo_text_light.svg">
-      <img height="100px" src="./resources/projects/logo_text_dark.svg">
+      <img height="300px" style="margin: 0; padding: 0" src="./resources/dist/common/logo/ImHexLogoSVGBG.svg">
     </picture>
   </h1>
 </a>
 
-<p align="center">A Hex Editor for Reverse Engineers, Programmers and people who value their retinas when working at 3 AM.</p>
-
+<p align="center">
+    A Hex Editor for Reverse Engineers, Programmers and people who value their retinas when working at 3 AM.
+    <br>
+    <a href="https://itinerarium.github.io/phoneme-synthesis/?w=/'ˈɪmhɛks/"><strong>/ˈɪmhɛks/</strong></a>
+</p>
 <p align="center">
   <a title="'Build' workflow Status" href="https://github.com/WerWolv/ImHex/actions?query=workflow%3ABuild"><img alt="'Build' workflow Status" src="https://img.shields.io/github/actions/workflow/status/WerWolv/ImHex/build.yml?longCache=true&style=for-the-badge&label=Build&logoColor=fff&logo=GitHub%20Actions&branch=master"></a>
   <a title="Discord Server" href="https://discord.gg/X63jZ36xBY"><img alt="Discord Server" src="https://img.shields.io/discord/789833418631675954?label=Discord&logo=Discord&logoColor=fff&style=for-the-badge"></a>
@@ -36,8 +38,8 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
 </p>
 
 ## Screenshots
-![Hex editor, patterns and data information](https://github.com/WerWolv/ImHex/assets/10835354/4f358238-2d27-41aa-9015-a2c6cc3708cf)
-![Bookmarks, disassembler and data processor](https://github.com/WerWolv/ImHex/assets/10835354/183bc2cc-2439-4ded-b4c5-b140e19fc92f)
+![Hex editor, patterns and data information](https://github.com/user-attachments/assets/902a7c4c-410d-490f-999e-14c856fec027)
+![Bookmarks, data information, find view and data processor](https://github.com/user-attachments/assets/58eefa1f-31c9-4bb8-a1c1-8cdd8ddbd29f)
 
 <details>
 <summary><strong>More Screenshots</strong></summary>
@@ -109,7 +111,7 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
 <details>
   <summary><strong>Data Inspector</strong></summary>
 
-  - Interpreting data as many different types with endianess, decimal, hexadecimal and octal support and bit inversion
+  - Interpreting data as many different types with endianness, decimal, hexadecimal and octal support and bit inversion
     - Unsigned and signed integers (8, 16, 24, 32, 48, 64 bit)
     - Floats (16, 32, 64 bit)
     - Signed and Unsigned LEB128
@@ -158,7 +160,7 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
   - Numeric Value search
     - Search for signed/unsigned integers and floats
     - Search for ranges of values
-    - Option to specify size and endianess
+    - Option to specify size and endianness
     - Option to ignore unaligned values
 </details>
 <details>
@@ -312,22 +314,26 @@ To use ImHex, the following minimal system requirements need to be met.
 > ImHex requires a GPU with OpenGL 3.0 support in general.
 > There are releases available (with the `-NoGPU` suffix) that are software rendered and don't require a GPU, however these can be a lot slower than the GPU accelerated versions.
 > 
-> If possible at all, make ImHex use the dedicated GPU on your system instead of the integrated one (especially Intel HD GPUs are known to cause issues).
+> If possible at all, make ImHex use the dedicated GPU on your system instead of the integrated one.
+> ImHex will usually run fine with integrated GPUs as well but certain Intel HD GPU drivers on Windows are known to cause graphical artifacts.
 
 - **OS**: 
   - **Windows**: Windows 7 or higher (Windows 10/11 recommended)
-  - **macOS**: macOS 11 (Big Sur) or higher, 
+  - **macOS**: macOS 13 (Ventura) or higher, 
+    - Lower versions should still work too, but you'll need to compile ImHex yourself. The release binaries will NOT work.
+    - The macOS build is not signed and will require you to manually allow them in the Security & Privacy settings.
   - **Linux**: "Modern" Linux. The following distributions have official releases available. Other distros are supported through the AppImage and Flatpak releases.
-    - Ubuntu 22.04/23.04
-    - Fedora 36/37
-    - RHEL/AlmaLinux 9
+    - Ubuntu and Debian
+    - Fedora
+    - RHEL/AlmaLinux
     - Arch Linux
-- **CPU**: x86_64 (64 Bit)
+    - Basically any other distro will work as well when compiling ImHex from sources.
+- **CPU**: Officially supported are x86_64 and ARM64, though any Little Endian 64 bit CPU should work.
 - **GPU**: OpenGL 3.0 or higher 
-  - Intel HD drivers are really buggy and often cause graphic artifacts
+  - Integrated Intel HD iGPUs are supported, however certain drivers are known to cause various graphical artifacts, especially on Windows. Use at your own risk.
   - In case you don't have a GPU available, there are software rendered releases available for Windows and macOS
-- **RAM**: 256MB, more may be required for more complicated analysis
-- **Storage**: 100MB
+- **RAM**: ~150MiB, more is required for more complex analysis
+- **Storage**: 150MiB
 
 ## Installing
 
@@ -336,8 +342,10 @@ Information on how to install ImHex can be found in the [Install](/INSTALL.md) g
 ## Compiling
 
 To compile ImHex on any platform, GCC (or Clang) is required with a version that supports C++23 or higher. 
-On macOS, Clang is also required to compile some ObjC code.
-All releases are being built using latest available GCC.
+Windows and Linux releases are being built using latest available GCC.
+MacOS releases are being built using latest available LLVM Clang.
+
+Important to note is, the MSVC and AppleClang compilers are both **NOT** supported since they're both generally severely outdated and lack features GCC and LLVM Clang have.
 
 > [!NOTE]
 > Many dependencies are bundled into the repository using submodules so make sure to clone it using the `--recurse-submodules` option.
@@ -358,24 +366,29 @@ To develop plugins for ImHex, use the following template project to get started.
 
 ### Contributors
 
+- [iTrooz](https://github.com/iTrooz) for getting ImHex onto the Web as well as hundreds of contributions in every part of the project
+- [jumanji144](https://github.com/jumanji144) for huge contributions to the Pattern Language and ImHex's infrastructure
 - [Mary](https://github.com/marysaka) for her immense help porting ImHex to MacOS and help during development
 - [Roblabla](https://github.com/Roblabla) for adding MSI Installer support to ImHex
-- [jam1garner](https://github.com/jam1garner) and [raytwo](https://github.com/raytwo) for their help with adding Rust support to plugins
 - [Mailaender](https://github.com/Mailaender) for getting ImHex onto Flathub
-- [iTrooz](https://github.com/iTrooz) for many improvements and new features to Imhex
 - Everybody else who has reported issues on Discord or GitHub that I had great conversations with :)
 
 ### Dependencies
 
 - Thanks a lot to ocornut for their amazing [Dear ImGui](https://github.com/ocornut/imgui) which is used for building the entire interface
-  - Thanks to ocornut as well for their hex editor view used as base for this project.
-  - Thanks to BalazsJako for their incredible [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) used for the pattern language syntax highlighting
-- Thanks to nlohmann for their [json](https://github.com/nlohmann/json) library used for project files
-- Thanks to aquynh for [capstone](https://github.com/aquynh/capstone) which is the base of the disassembly window
+  - Thanks to epezent for [ImPlot](https://github.com/epezent/implot) used to plot data in various places
+  - Thanks to Nelarius for [ImNodes](https://github.com/Nelarius/imnodes) used as base for the data processor 
+  - Thanks to BalazsJako for [ImGuiColorTextEdit](https://github.com/BalazsJako/ImGuiColorTextEdit) used for the pattern language syntax highlighting
+- Thanks to nlohmann for their [json](https://github.com/nlohmann/json) library used for configuration files
 - Thanks to vitaut for their [libfmt](https://github.com/fmtlib/fmt) library which makes formatting and logging so much better
+- Thanks to btzy for [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) and their great support, used for handling file dialogs on all platforms
+- Thanks to danyspin97 for [xdgpp](https://sr.ht/~danyspin97/xdgpp) used to handle folder paths on Linux
+- Thanks to aquynh for [capstone](https://github.com/aquynh/capstone) which is the base of the disassembly window
 - Thanks to rxi for [microtar](https://github.com/rxi/microtar) used for extracting downloaded store assets 
-- Thanks to btzy for [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended)
-- Thanks to danyspin97 for [xdgpp](https://sr.ht/~danyspin97/xdgpp)
+- Thanks to VirusTotal for [Yara](https://github.com/VirusTotal/yara) used by the Yara plugin
+- Thanks to Martinsos for [edlib](https://github.com/Martinsos/edlib) used for sequence searching in the diffing view
+- Thanks to ron4fun for [HashLibPlus](https://github.com/ron4fun/HashLibPlus) which implements every hashing algorithm under the sun
+- Thanks to mackron for [miniaudio](https://github.com/mackron/miniaudio) used to play audio files
 - Thanks to all other groups and organizations whose libraries are used in ImHex
 
 ### License

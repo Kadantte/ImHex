@@ -1,14 +1,17 @@
 #include <hex/helpers/logger.hpp>
 
+#include <hex/api/task_manager.hpp>
 #include <hex/api/event_manager.hpp>
+
 #include <hex/helpers/fs.hpp>
 #include <hex/helpers/fmt.hpp>
+#include <hex/helpers/default_paths.hpp>
 
 #include <wolv/io/file.hpp>
 
+#include <mutex>
 #include <chrono>
 #include <fmt/chrono.h>
-#include <hex/api/task_manager.hpp>
 
 #if defined(OS_WINDOWS)
     #include <Windows.h>
@@ -40,9 +43,14 @@ namespace hex::log {
 
     namespace impl {
 
-        std::recursive_mutex& getLoggerMutex() {
-            return s_loggerMutex;
+        void lockLoggerMutex() {
+            s_loggerMutex.lock();
         }
+
+        void unlockLoggerMutex() {
+            s_loggerMutex.unlock();
+        }
+
 
         bool isLoggingSuspended() {
             return s_loggingSuspended;
@@ -74,13 +82,13 @@ namespace hex::log {
         void redirectToFile() {
             if (s_loggerFile.isValid()) return;
 
-            for (const auto &path : fs::getDefaultPaths(fs::ImHexPath::Logs, true)) {
+            for (const auto &path : paths::Logs.all()) {
                 wolv::io::fs::createDirectories(path);
                 s_loggerFile = wolv::io::File(path / hex::format("{0:%Y%m%d_%H%M%S}.log", fmt::localtime(std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()))), wolv::io::File::Mode::Create);
                 s_loggerFile.disableBuffering();
 
                 if (s_loggerFile.isValid()) {
-                    s_colorOutputEnabled = true;
+                    s_colorOutputEnabled = false;
                     break;
                 }
             }
@@ -136,14 +144,12 @@ namespace hex::log {
             fmt::print(dest, "{0}", std::string(projectNameLength > MaxTagLength ? 0 : MaxTagLength - projectNameLength, ' '));
         }
 
-        void assertionHandler(bool expr, const char* exprString, const char* file, int line) {
-            if (!expr) {
-                log::error("Assertion failed: {} at {}:{}", exprString, file, line);
+        void assertionHandler(const char* exprString, const char* file, int line) {
+            log::error("Assertion failed: {} at {}:{}", exprString, file, line);
 
-                #if defined (DEBUG)
-                    std::abort();
-                #endif
-            }
+            #if defined (DEBUG)
+                std::abort();
+            #endif
         }
 
         namespace color {

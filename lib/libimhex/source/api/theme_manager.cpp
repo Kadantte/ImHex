@@ -16,19 +16,32 @@ namespace hex {
         AutoReset<std::map<std::string, ThemeManager::StyleHandler>> s_styleHandlers;
         AutoReset<std::string> s_imageTheme;
         AutoReset<std::string> s_currTheme;
+        AutoReset<std::optional<float>> s_accentColor;
 
+        std::recursive_mutex s_themeMutex;
+    }
+
+
+    void ThemeManager::reapplyCurrentTheme() {
+        ThemeManager::changeTheme(s_currTheme);
     }
 
 
     void ThemeManager::addThemeHandler(const std::string &name, const ColorMap &colorMap, const std::function<ImColor(u32)> &getFunction, const std::function<void(u32, ImColor)> &setFunction) {
+        std::unique_lock lock(s_themeMutex);
+
         (*s_themeHandlers)[name] = { colorMap, getFunction, setFunction };
     }
 
     void ThemeManager::addStyleHandler(const std::string &name, const StyleMap &styleMap) {
+        std::unique_lock lock(s_themeMutex);
+
         (*s_styleHandlers)[name] = { styleMap };
     }
 
     void ThemeManager::addTheme(const std::string &content) {
+        std::unique_lock lock(s_themeMutex);
+
         try {
             auto theme = nlohmann::json::parse(content);
 
@@ -66,7 +79,7 @@ namespace hex {
         if (color == 0x00000000)
             return ImVec4(0, 0, 0, -1);
 
-        return ImColor(hex::changeEndianess(color, std::endian::big));
+        return ImColor(hex::changeEndianness(color, std::endian::big));
     }
 
     nlohmann::json ThemeManager::exportCurrentTheme(const std::string &name) {
@@ -83,7 +96,7 @@ namespace hex {
 
             for (const auto &[key, value] : handler.colorMap) {
                 auto color = handler.getFunction(value);
-                theme["colors"][type][key] = fmt::format("#{:08X}", hex::changeEndianess(u32(color), std::endian::big));
+                theme["colors"][type][key] = fmt::format("#{:08X}", hex::changeEndianness(u32(color), std::endian::big));
             }
         }
 
@@ -106,6 +119,8 @@ namespace hex {
     }
 
     void ThemeManager::changeTheme(std::string name) {
+        std::unique_lock lock(s_themeMutex);
+
         if (!s_themes->contains(name)) {
             if (s_themes->empty()) {
                 return;
@@ -141,10 +156,26 @@ namespace hex {
                         continue;
                     }
 
-                    auto color = parseColorString(value.get<std::string>());
+                    auto colorString = value.get<std::string>();
+                    bool accentableColor = false;
+                    if (colorString.starts_with("*")) {
+                        colorString = colorString.substr(1);
+                        accentableColor = true;
+                    }
+                    auto color = parseColorString(colorString);
+
                     if (!color.has_value()) {
-                        log::warn("Invalid color '{}' for '{}.{}'", value.get<std::string>(), type, key);
+                        log::warn("Invalid color '{}' for '{}.{}'", colorString, type, key);
                         continue;
+                    }
+
+                    if (accentableColor && s_accentColor->has_value()) {
+                        float h, s, v;
+                        ImGui::ColorConvertRGBtoHSV(color->Value.x, color->Value.y, color->Value.z, h, s, v);
+
+                        h = s_accentColor->value();
+
+                        ImGui::ColorConvertHSVtoRGB(h, s, v, color->Value.x, color->Value.y, color->Value.z);
                     }
 
                     (*s_themeHandlers)[type].setFunction((*s_themeHandlers)[type].colorMap.at(key), color.value());
@@ -168,12 +199,12 @@ namespace hex {
                     const float scale = style.needsScaling ? 1_scaled : 1.0F;
 
                     if (value.is_number_float()) {
-                        if (const auto newValue = std::get_if<float*>(&style.value); newValue != nullptr)
+                        if (const auto newValue = std::get_if<float*>(&style.value); newValue != nullptr && *newValue != nullptr)
                             **newValue = value.get<float>() * scale;
                         else
                             log::warn("Style variable '{}' was of type ImVec2 but a float was expected.", name);
                     } else if (value.is_array() && value.size() == 2 && value[0].is_number_float() && value[1].is_number_float()) {
-                        if (const auto newValue = std::get_if<ImVec2*>(&style.value); newValue != nullptr)
+                        if (const auto newValue = std::get_if<ImVec2*>(&style.value); newValue != nullptr && *newValue != nullptr)
                             **newValue = ImVec2(value[0].get<float>() * scale, value[1].get<float>() * scale);
                         else
                             log::warn("Style variable '{}' was of type float but a ImVec2 was expected.", name);
@@ -191,6 +222,8 @@ namespace hex {
                 hex::log::error("Theme '{}' has invalid image theme!", name);
                 s_imageTheme = "dark";
             }
+        } else {
+            s_imageTheme = "dark";
         }
 
         s_currTheme = name;
@@ -211,11 +244,21 @@ namespace hex {
     }
 
     void ThemeManager::reset() {
+        std::unique_lock lock(s_themeMutex);
+
         s_themes->clear();
         s_styleHandlers->clear();
         s_themeHandlers->clear();
         s_imageTheme->clear();
         s_currTheme->clear();
+    }
+
+    void ThemeManager::setAccentColor(const ImColor &color) {
+        float h, s, v;
+        ImGui::ColorConvertRGBtoHSV(color.Value.x, color.Value.y, color.Value.z, h, s, v);
+
+        s_accentColor = h;
+        reapplyCurrentTheme();
     }
 
 

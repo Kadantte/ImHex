@@ -6,7 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <popups/popup_question.hpp>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -26,16 +26,15 @@ namespace hex::plugin::builtin {
             this->getWindowOpenState() = true;
         });
 
-        EventImHexStartupFinished::subscribe(this, [] {
+        EventImHexStartupFinished::subscribe(this, []{
             for (const auto &[unlocalizedCategory, unlocalizedDescription, subCategories] : ContentRegistry::Settings::impl::getSettings()) {
                 for (const auto &[unlocalizedSubCategory, entries] : subCategories) {
                     for (const auto &[unlocalizedName, widget] : entries) {
                         try {
-                            widget->load(ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, widget->store()));
-                            widget->onChanged();
+                            auto defaultValue = widget->store();
+                            widget->load(ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, defaultValue));
                         } catch (const std::exception &e) {
                             log::error("Failed to load setting [{} / {}]: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
-                            widget->store();
                         }
                     }
                 }
@@ -49,78 +48,101 @@ namespace hex::plugin::builtin {
     }
 
     void ViewSettings::drawContent() {
-        if (ImGui::BeginTabBar("settings")) {
-            auto &categories = ContentRegistry::Settings::impl::getSettings();
+        if (ImGui::BeginTable("Settings", 2, ImGuiTableFlags_BordersInner)) {
+            ImGui::TableSetupColumn("##category", ImGuiTableColumnFlags_WidthFixed, 120_scaled);
+            ImGui::TableSetupColumn("##settings", ImGuiTableColumnFlags_WidthStretch);
 
-            // Draw all categories
-            for (auto &category : categories) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
 
-                // Skip empty categories
-                if (category.subCategories.empty())
-                    continue;
+            {
+                auto &categories = ContentRegistry::Settings::impl::getSettings();
 
-                // For each category, create a new tab
-                if (ImGui::BeginTabItem(Lang(category.unlocalizedName))) {
-                    if (ImGui::BeginChild("scrolling")) {
+                // Draw all categories
+                bool categorySet = false;
+                for (auto &category : categories) {
+                    // Skip empty categories
+                    if (category.subCategories.empty())
+                        continue;
 
-                        // Draw the category description
-                        if (!category.unlocalizedDescription.empty()) {
-                            ImGuiExt::TextFormattedWrapped("{}", Lang(category.unlocalizedDescription));
-                            ImGui::NewLine();
-                        }
+                    if (ImGui::Selectable(Lang(category.unlocalizedName), m_selectedCategory == &category, ImGuiSelectableFlags_NoAutoClosePopups) || m_selectedCategory == nullptr)
+                        m_selectedCategory = &category;
 
-                        // Draw all settings of that category
-                        for (auto &subCategory : category.subCategories) {
+                    if (m_selectedCategory == &category)
+                        categorySet = true;
+                }
 
-                            // Skip empty subcategories
-                            if (subCategory.entries.empty())
-                                continue;
+                if (!categorySet)
+                    m_selectedCategory = nullptr;
+            }
 
-                            ImGuiExt::BeginSubWindow(Lang(subCategory.unlocalizedName));
-                            {
-                                for (auto &setting : subCategory.entries) {
-                                    ImGui::BeginDisabled(!setting.widget->isEnabled());
-                                    ImGui::PushItemWidth(-200_scaled);
-                                    bool settingChanged = setting.widget->draw(Lang(setting.unlocalizedName));
-                                    ImGui::PopItemWidth();
-                                    ImGui::EndDisabled();
+            ImGui::TableNextColumn();
 
-                                    if (auto tooltip = setting.widget->getTooltip(); tooltip.has_value() && ImGui::IsItemHovered())
-                                        ImGuiExt::InfoTooltip(Lang(tooltip.value()));
+            if (m_selectedCategory != nullptr) {
+                auto &category = *m_selectedCategory;
 
-                                    auto &widget = setting.widget;
+                if (ImGui::BeginChild("scrolling")) {
 
-                                    // Handle a setting being changed
-                                    if (settingChanged) {
-                                        auto newValue = widget->store();
+                    // Draw the category description
+                    if (!category.unlocalizedDescription.empty()) {
+                        ImGuiExt::TextFormattedWrapped("{}", Lang(category.unlocalizedDescription));
+                        ImGui::NewLine();
+                    }
 
-                                        // Write new value to settings
-                                        ContentRegistry::Settings::write<nlohmann::json>(category.unlocalizedName, setting.unlocalizedName, newValue);
+                    // Draw all settings of that category
+                    u32 index = 0;
+                    for (auto &subCategory : category.subCategories) {
+                        ON_SCOPE_EXIT { index += 1; };
 
-                                        // Print a debug message
-                                        log::debug("Setting [{} / {}]: Value was changed to {}", category.unlocalizedName.get(), setting.unlocalizedName.get(), nlohmann::to_string(newValue));
+                        // Skip empty subcategories
+                        if (subCategory.entries.empty())
+                            continue;
 
-                                        // Signal that the setting was changed
-                                        widget->onChanged();
+                        if (ImGuiExt::BeginSubWindow(Lang(subCategory.unlocalizedName))) {
+                            for (auto &setting : subCategory.entries) {
+                                ImGui::BeginDisabled(!setting.widget->isEnabled());
+                                ImGui::PushItemWidth(-200_scaled);
+                                bool settingChanged = setting.widget->draw(Lang(setting.unlocalizedName));
+                                ImGui::PopItemWidth();
+                                ImGui::EndDisabled();
 
-                                        // Request a restart if the setting requires it
-                                        if (widget->doesRequireRestart()) {
-                                            m_restartRequested = true;
-                                            m_triggerPopup = true;
-                                        }
+                                if (const auto &tooltip = setting.widget->getTooltip(); tooltip.has_value() && ImGui::IsItemHovered())
+                                    ImGuiExt::InfoTooltip(Lang(tooltip.value()));
+
+                                auto &widget = setting.widget;
+
+                                // Handle a setting being changed
+                                if (settingChanged) {
+                                    auto newValue = widget->store();
+
+                                    // Write new value to settings
+                                    ContentRegistry::Settings::write<nlohmann::json>(category.unlocalizedName, setting.unlocalizedName, newValue);
+
+                                    // Print a debug message
+                                    log::debug("Setting [{} / {}]: Value was changed to {}", category.unlocalizedName.get(), setting.unlocalizedName.get(), nlohmann::to_string(newValue));
+
+                                    // Signal that the setting was changed
+                                    widget->onChanged();
+
+                                    // Request a restart if the setting requires it
+                                    if (widget->doesRequireRestart()) {
+                                        m_restartRequested = true;
+                                        m_triggerPopup = true;
                                     }
                                 }
                             }
-                            ImGuiExt::EndSubWindow();
-                        }
-                    }
-                    ImGui::EndChild();
 
-                    ImGui::EndTabItem();
+                        }
+                        ImGuiExt::EndSubWindow();
+
+                        if (index != i64(category.subCategories.size()) - 1)
+                            ImGui::NewLine();
+                    }
                 }
+                ImGui::EndChild();
             }
 
-            ImGui::EndTabBar();
+            ImGui::EndTable();
         }
     }
 

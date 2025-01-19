@@ -6,13 +6,14 @@
 #include <imgui.h>
 
 #include <capstone/capstone.h>
+#include <content/helpers/disassembler.hpp>
 
 #include <hex/ui/imgui_imhex_extensions.h>
 #include <hex/api/localization_manager.hpp>
 
 namespace hex::plugin::disasm {
 
-    void drawDisassemblyVisualizer(pl::ptrn::Pattern &, pl::ptrn::IIterable &, bool shouldReset, std::span<const pl::core::Token::Literal> arguments) {
+    void drawDisassemblyVisualizer(pl::ptrn::Pattern &, bool shouldReset, std::span<const pl::core::Token::Literal> arguments) {
         struct Disassembly {
             u64 address;
             std::vector<u8> bytes;
@@ -23,13 +24,12 @@ namespace hex::plugin::disasm {
         if (shouldReset) {
             auto pattern  = arguments[0].toPattern();
             auto baseAddress  = arguments[1].toUnsigned();
-            auto architecture = arguments[2].toUnsigned();
-            auto mode         = arguments[3].toUnsigned();
+            const auto [arch, mode] = CapstoneDisassembler::stringToSettings(arguments[2].toString());
 
             disassembly.clear();
 
             csh capstone;
-            if (cs_open(static_cast<cs_arch>(architecture), static_cast<cs_mode>(mode), &capstone) == CS_ERR_OK) {
+            if (cs_open(arch, mode, &capstone) == CS_ERR_OK) {
                 cs_option(capstone, CS_OPT_SKIPDATA, CS_OPT_ON);
 
                 auto data = pattern->getBytes();

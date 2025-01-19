@@ -5,14 +5,15 @@
 #include <hex/api/plugin_manager.hpp>
 #include <hex/helpers/fs.hpp>
 #include <hex/helpers/logger.hpp>
+#include <hex/helpers/default_paths.hpp>
 
 #include <wolv/utils/guards.hpp>
+#include <wolv/utils/string.hpp>
 
 
 #if defined(OS_WINDOWS)
     #include <windows.h>
     #include <shellapi.h>
-    #include <codecvt>
 #endif
 
 namespace hex::init {
@@ -34,7 +35,7 @@ namespace hex::init {
         std::vector<std::string> args;
 
         #if defined (OS_WINDOWS)
-            hex::unused(argv);
+            std::ignore = argv;
 
             // On Windows, argv contains UTF-16 encoded strings, so we need to convert them to UTF-8
             auto convertedCommandLine = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
@@ -46,7 +47,7 @@ namespace hex::init {
             // Skip the first argument (the executable path) and convert the rest to a vector of UTF-8 strings
             for (int i = 1; i < argc; i += 1) {
                 std::wstring wcharArg = convertedCommandLine[i];
-                std::string  utf8Arg  = std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>().to_bytes(wcharArg);
+                std::string utf8Arg = wolv::util::wstringToUtf8(wcharArg);
 
                 args.push_back(utf8Arg);
             }
@@ -59,7 +60,8 @@ namespace hex::init {
 
 
         // Load all plugins but don't initialize them
-        for (const auto &dir : fs::getDefaultPaths(fs::ImHexPath::Plugins)) {
+        PluginManager::loadLibraries();
+        for (const auto &dir : paths::Plugins.read()) {
             PluginManager::load(dir);
         }
 

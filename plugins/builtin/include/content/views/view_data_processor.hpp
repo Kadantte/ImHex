@@ -8,6 +8,7 @@
 #include <imnodes_internal.h>
 
 #include <string>
+#include <hex/api/task_manager.hpp>
 #include <nlohmann/json.hpp>
 
 namespace hex::plugin::builtin {
@@ -24,7 +25,10 @@ namespace hex::plugin::builtin {
                 ctx->AttributeFlagStack = GImNodes->AttributeFlagStack;
 
                 return ctx;
-            }(), ImNodes::DestroyContext };
+            }(), [](ImNodesContext *ptr) {
+                if (ptr != nullptr)
+                    ImNodes::DestroyContext(ptr);
+            } };
 
             std::list<std::unique_ptr<dp::Node>> nodes;
             std::list<dp::Node*> endNodes;
@@ -47,9 +51,10 @@ namespace hex::plugin::builtin {
 
         static void eraseLink(Workspace &workspace, int id);
         static void eraseNodes(Workspace &workspace, const std::vector<int> &ids);
-        static void processNodes(Workspace &workspace);
+        void processNodes(Workspace &workspace);
 
         void reloadCustomNodes();
+        void updateNodePositions();
 
         std::vector<Workspace*> &getWorkspaceStack() { return *m_workspaceStack; }
 
@@ -73,6 +78,7 @@ namespace hex::plugin::builtin {
 
         PerProvider<Workspace> m_mainWorkspace;
         PerProvider<std::vector<Workspace*>> m_workspaceStack;
+        TaskHolder m_evaluationTask;
     };
 
 }

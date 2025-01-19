@@ -1,7 +1,7 @@
 # This base image is also known as "crosscompile". See arm64.crosscompile.Dockerfile
-FROM ghcr.io/itrooz/macos-crosscompile:clang17-nosdk as build
+FROM ghcr.io/itrooz/macos-crosscompile:clang19-nosdk as build
 
-ENV MACOSX_DEPLOYMENT_TARGET 12.1
+ENV MACOSX_DEPLOYMENT_TARGET 13.0
 
 # -- DOWNLOADING STUFF
 
@@ -35,9 +35,9 @@ EOF
 
 ## Download libmagic
 ### Clone libmagic
-RUN git clone https://github.com/file/file /mnt/file
+RUN git clone --depth 1 --branch FILE5_45 https://github.com/file/file /mnt/file
 ### Download libmagic dependencies
-RUN --mount=type=cache,target=/var/lib/apt/lists/ apt install -y libtool autoconf
+RUN --mount=type=cache,target=/var/lib/apt/lists/ apt update && apt install -y libtool autoconf
 
 # -- DOWNLOADING + BUILDING STUFF
 
@@ -118,7 +118,7 @@ if [ "$CUSTOM_GLFW" ]; then
     cd /mnt/glfw
     mkdir build
     cd build
-    CC=o64-gcc CXX=o64-g++ cmake -G "Ninja"             \
+    CC=o64-clang CXX=o64-clang++ cmake -G "Ninja"       \
           -DCMAKE_BUILD_TYPE=$BUILD_TYPE                \
           -DBUILD_SHARED_LIBS=ON                        \
           -DCMAKE_C_COMPILER_LAUNCHER=ccache            \
@@ -126,7 +126,7 @@ if [ "$CUSTOM_GLFW" ]; then
           -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache         \
           -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache       \
           -DCMAKE_INSTALL_PREFIX=/vcpkg/installed/arm-osx-mytriplet \
-          -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=12.1 \
+          -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
         ..
     ninja -j $JOBS install
 
@@ -148,7 +148,7 @@ RUN --mount=type=cache,target=/cache --mount=type=cache,target=/mnt/ImHex/build/
         `# ccache flags` \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
         `# MacOS cross-compiling flags` \
-        -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=12.1 \
+        -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
         `# Override compilers for code generators` \
         -DNATIVE_CMAKE_C_COMPILER=/usr/bin/clang -DNATIVE_CMAKE_CXX_COMPILER=/usr/bin/clang++ \
         `# Normal ImHex flags` \
@@ -170,4 +170,4 @@ EOF
 
 
 FROM scratch
-COPY --from=build /mnt/ImHex/build/install/imhex.app ImHex.app
+COPY --from=build /mnt/ImHex/build/install/imhex.app imhex.app

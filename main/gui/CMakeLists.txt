@@ -30,6 +30,7 @@ add_executable(main ${APPLICATION_TYPE}
 
 target_include_directories(main PUBLIC include)
 setupCompilerFlags(main)
+setupCompilerFlags(libimhex)
 
 set(LIBROMFS_RESOURCE_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/romfs)
 set(LIBROMFS_PROJECT_NAME imhex)
@@ -43,7 +44,7 @@ if (EMSCRIPTEN)
     target_link_options(main PRIVATE -sEXPORTED_RUNTIME_METHODS=ccall)
     target_link_options(main PRIVATE -sFETCH)
     target_link_options(main PRIVATE -sWASM_BIGINT)
-    target_link_options(main PRIVATE -O1)
+    target_link_options(main PRIVATE -O2)
     target_link_options(main PRIVATE -sLEGACY_GL_EMULATION)
     target_link_options(main PRIVATE -fsanitize=null)
     target_link_options(main PRIVATE -fsanitize-minimal-runtime)
@@ -51,16 +52,26 @@ if (EMSCRIPTEN)
 endif ()
 
 set_target_properties(main PROPERTIES
-    OUTPUT_NAME ${IMHEX_APPLICATION_NAME}
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../..)
+    OUTPUT_NAME "${IMHEX_APPLICATION_NAME}"
+    RUNTIME_OUTPUT_DIRECTORY "${IMHEX_MAIN_OUTPUT_DIRECTORY}"
+)
 
 target_compile_definitions(main PRIVATE IMHEX_PROJECT_NAME="${PROJECT_NAME}")
 
 target_link_libraries(main PRIVATE libromfs-imhex libimhex libwolv ${LIBBACKTRACE_LIBRARIES} LLVMDemangle)
 if (WIN32)
-    target_link_libraries(main PRIVATE usp10 wsock32 ws2_32 Dwmapi.lib)
+    target_link_libraries(main PRIVATE usp10 wsock32 ws2_32 Dwmapi.lib Winmm.lib)
 else ()
     target_link_libraries(main PRIVATE pthread)
+
+    if (NOT APPLE)
+        find_package(Fontconfig)
+        if (TARGET Fontconfig::Fontconfig)
+            message(STATUS "Using Fontconfig version: ${Fontconfig_VERSION}")
+            target_link_libraries(main PRIVATE Fontconfig::Fontconfig)
+            target_compile_definitions(main PRIVATE IMHEX_HAS_FONTCONFIG)
+        endif ()
+    endif ()
 endif ()
 
 precompileHeaders(main ${CMAKE_CURRENT_SOURCE_DIR}/include)

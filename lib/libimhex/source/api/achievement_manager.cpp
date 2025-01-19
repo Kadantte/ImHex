@@ -2,8 +2,13 @@
 #include <hex/api/event_manager.hpp>
 
 #include <hex/helpers/auto_reset.hpp>
+#include <hex/helpers/default_paths.hpp>
 
 #include <nlohmann/json.hpp>
+
+#if defined(OS_WEB)
+    #include <emscripten.h>
+#endif
 
 namespace hex {
 
@@ -195,9 +200,12 @@ namespace hex {
 
 
     constexpr static auto AchievementsFile = "achievements.json";
+    bool AchievementManager::s_initialized = false;
 
     void AchievementManager::loadProgress() {
-        for (const auto &directory : fs::getDefaultPaths(fs::ImHexPath::Config)) {
+        if (s_initialized)
+            return;
+        for (const auto &directory : paths::Config.read()) {
             auto path = directory / AchievementsFile;
 
             if (!wolv::io::fs::exists(path)) {
@@ -211,7 +219,16 @@ namespace hex {
             }
 
             try {
-                auto json = nlohmann::json::parse(file.readString());
+                #if defined(OS_WEB)
+                    auto data = (char *) MAIN_THREAD_EM_ASM_INT({
+                        let data = localStorage.getItem("achievements");
+                        return data ? stringToNewUTF8(data) : null;
+                    });
+                #else
+                    auto data = file.readString();
+                #endif
+
+                auto json = nlohmann::json::parse(data);
 
                 for (const auto &[categoryName, achievements] : getAchievements()) {
                     for (const auto &[achievementName, achievement] : achievements) {
@@ -226,6 +243,8 @@ namespace hex {
                         }
                     }
                 }
+                
+                s_initialized = true;
             } catch (const std::exception &e) {
                 log::error("Failed to load achievements: {}", e.what());
             }
@@ -234,6 +253,8 @@ namespace hex {
     }
 
     void AchievementManager::storeProgress() {
+        if (!s_initialized)
+            loadProgress();
         nlohmann::json json;
         for (const auto &[categoryName, achievements] : getAchievements()) {
             json[categoryName] = nlohmann::json::object();
@@ -246,16 +267,23 @@ namespace hex {
         if (json.empty())
             return;
 
-        for (const auto &directory : fs::getDefaultPaths(fs::ImHexPath::Config)) {
-            auto path = directory / AchievementsFile;
+        #if defined(OS_WEB)
+            auto data = json.dump();
+            MAIN_THREAD_EM_ASM({
+                localStorage.setItem("achievements", UTF8ToString($0));
+            }, data.c_str());
+        #else
+            for (const auto &directory : paths::Config.write()) {
+                auto path = directory / AchievementsFile;
 
-            wolv::io::File file(path, wolv::io::File::Mode::Create);
-            if (!file.isValid())
-                continue;
+                wolv::io::File file(path, wolv::io::File::Mode::Create);
+                if (!file.isValid())
+                    continue;
 
-            file.writeString(json.dump(4));
-            break;
-        }
+                file.writeString(json.dump(4));
+                break;
+            }
+        #endif
     }
 
 }

@@ -3,7 +3,7 @@
 #include <hex/api/content_registry.hpp>
 #include <hex/providers/memory_provider.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <pl/patterns/pattern.hpp>
 #include <wolv/utils/lock.hpp>
@@ -25,11 +25,17 @@ namespace hex::plugin::builtin {
                 drawer->enableRowColoring(m_rowColoring);
         });
 
+        ContentRegistry::Settings::onChange("hex.builtin.setting.general", "hex.builtin.setting.general.pattern_data_max_filter_items", [this](const ContentRegistry::Settings::SettingsValue &value) {
+            m_maxFilterItems = value.get<u32>(128);
+            for (auto &drawer : m_patternDrawer.all())
+                drawer->setMaxFilterDisplayItems(m_maxFilterItems);
+        });
+
         EventPatternEvaluating::subscribe(this, [this]{
             (*m_patternDrawer)->reset();
         });
 
-        EventPatternExecuted::subscribe(this, [this](auto){
+        EventPatternExecuted::subscribe(this, [this](const auto&){
             (*m_patternDrawer)->reset();
         });
 
@@ -37,17 +43,27 @@ namespace hex::plugin::builtin {
            (*m_patternDrawer)->jumpToPattern(pattern);
         });
 
-        m_patternDrawer.setOnCreateCallback([this](const prv::Provider *provider, auto &drawer) {
+        ImHexApi::HexEditor::addHoverHighlightProvider([this](const prv::Provider *, u64, size_t) -> std::set<Region> {
+            return { m_hoveredPatternRegion };
+        });
+
+        m_patternDrawer.setOnCreateCallback([this](const prv::Provider *, auto &drawer) {
             drawer = std::make_unique<ui::PatternDrawer>();
 
             drawer->setSelectionCallback([](const pl::ptrn::Pattern *pattern) {
-                ImHexApi::HexEditor::setSelection(Region { pattern->getOffset(), pattern->getSize() });
+                ImHexApi::HexEditor::setSelection(Region(pattern->getOffset(), pattern->getSize()));
                 RequestPatternEditorSelectionChange::post(pattern->getLine(), 0);
+            });
+
+            drawer->setHoverCallback([this](const pl::ptrn::Pattern *pattern) {
+                if (pattern == nullptr)
+                    m_hoveredPatternRegion = Region::Invalid();
+                else
+                    m_hoveredPatternRegion = Region(pattern->getOffset(), pattern->getSize());
             });
 
             drawer->setTreeStyle(m_treeStyle);
             drawer->enableRowColoring(m_rowColoring);
-            drawer->enablePatternEditing(provider->isWritable());
         });
     }
 
@@ -62,9 +78,10 @@ namespace hex::plugin::builtin {
             // Make sure the runtime has finished evaluating and produced valid patterns
             auto &runtime = ContentRegistry::PatternLanguage::getRuntime();
 
-            const auto height = std::max(ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing() - ImGui::GetStyle().FramePadding.y * 2, ImGui::GetTextLineHeightWithSpacing() * 5);
+            const auto height = std::max(ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing() - (ImGui::GetStyle().FramePadding.y * 2), ImGui::GetTextLineHeightWithSpacing() * 5);
 
             if (*m_patternDrawer != nullptr) {
+                (*m_patternDrawer)->enablePatternEditing(ImHexApi::Provider::get()->isWritable());
                 if (!runtime.arePatternsValid()) {
                     (*m_patternDrawer)->draw({ }, nullptr, height);
                 } else {

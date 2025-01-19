@@ -4,23 +4,30 @@
 #include <hex/api/theme_manager.hpp>
 #include <hex/api/shortcut_manager.hpp>
 #include <hex/api/event_manager.hpp>
+#include <hex/api/layout_manager.hpp>
 
 #include <hex/helpers/http_requests.hpp>
 #include <hex/helpers/utils.hpp>
 
 #include <imgui.h>
 #include <hex/ui/imgui_imhex_extensions.h>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
+
+#include <wolv/literals.hpp>
+#include <wolv/utils/string.hpp>
 
 #include <nlohmann/json.hpp>
 
 #include <utility>
-#include <hex/api/layout_manager.hpp>
-#include <wolv/utils/string.hpp>
+#include <romfs/romfs.hpp>
 
 namespace hex::plugin::builtin {
 
+    using namespace wolv::literals;
+
     namespace {
+
+        bool s_showScalingWarning = true;
 
         /*
             Values of this setting:
@@ -91,10 +98,11 @@ namespace hex::plugin::builtin {
             bool draw(const std::string &) override {
                 bool result = false;
 
-                if (!ImGui::BeginListBox("", ImVec2(-40_scaled, 280_scaled))) {
+                if (!ImGui::BeginListBox("##UserFolders", ImVec2(-40_scaled, 280_scaled))) {
                     return false;
                 } else {
                     for (size_t n = 0; n < m_paths.size(); n++) {
+                        ImGui::PushID(n + 1);
                         const bool isSelected = (m_itemIndex == n);
                         if (ImGui::Selectable(wolv::util::toUTF8String(m_paths[n]).c_str(), isSelected)) {
                             m_itemIndex = n;
@@ -103,6 +111,8 @@ namespace hex::plugin::builtin {
                         if (isSelected) {
                             ImGui::SetItemDefaultFocus();
                         }
+
+                        ImGui::PopID();
                     }
                     ImGui::EndListBox();
                 }
@@ -140,6 +150,7 @@ namespace hex::plugin::builtin {
                 if (data.is_array()) {
                     std::vector<std::string> pathStrings = data;
 
+                    m_paths.clear();
                     for (const auto &pathString : pathStrings) {
                         m_paths.emplace_back(pathString);
                     }
@@ -152,7 +163,7 @@ namespace hex::plugin::builtin {
                 std::vector<std::string> pathStrings;
 
                 for (const auto &path : m_paths) {
-                    pathStrings.push_back(wolv::util::toUTF8String(path));
+                    pathStrings.push_back(wolv::io::fs::toNormalizedPathString(path));
                 }
 
                 return pathStrings;
@@ -168,16 +179,24 @@ namespace hex::plugin::builtin {
             bool draw(const std::string &name) override {
                 auto format = [this] -> std::string {
                     if (m_value == 0)
-                        return "hex.builtin.setting.interface.scaling.native"_lang + hex::format(" (x{:.1f})", ImHexApi::System::getNativeScale());
+                        return hex::format("{} (x{:.1f})", "hex.builtin.setting.interface.scaling.native"_lang, ImHexApi::System::getNativeScale());
                     else
                         return "x%.1f";
                 }();
 
-                if (ImGui::SliderFloat(name.data(), &m_value, 0, 10, format.c_str(), ImGuiSliderFlags_AlwaysClamp)) {
-                    return true;
+                bool changed = ImGui::SliderFloat(name.data(), &m_value, 0, 4, format.c_str());
+
+                if (m_value < 0)
+                    m_value = 0;
+                else if (m_value > 10)
+                    m_value = 10;
+
+                if (s_showScalingWarning && (u32(m_value * 10) % 10) != 0) {
+                    ImGui::SameLine();
+                    ImGuiExt::HelpHover("hex.builtin.setting.interface.scaling.fractional_warning"_lang, ICON_VS_WARNING, ImGuiExt::GetCustomColorU32(ImGuiCustomCol_ToolbarRed));
                 }
 
-                return false;
+                return changed;
             }
 
             void load(const nlohmann::json &data) override {
@@ -189,8 +208,12 @@ namespace hex::plugin::builtin {
                 return m_value;
             }
 
+            float getValue() const {
+                return m_value;
+            }
+
         private:
-            float m_value = 0;
+            float m_value = 0.0F;
         };
 
         class AutoBackupWidget : public ContentRegistry::Settings::Widgets::Widget {
@@ -223,14 +246,17 @@ namespace hex::plugin::builtin {
             }
 
         private:
-            int m_value = 0;
+            int m_value = 5 * 2;
         };
 
         class KeybindingWidget : public ContentRegistry::Settings::Widgets::Widget {
         public:
-            KeybindingWidget(View *view, const Shortcut &shortcut) : m_view(view), m_shortcut(shortcut), m_drawShortcut(shortcut), m_defaultShortcut(shortcut) {}
+            KeybindingWidget(View *view, const Shortcut &shortcut, const std::vector<UnlocalizedString> &fullName)
+                : m_view(view), m_shortcut(shortcut), m_drawShortcut(shortcut), m_defaultShortcut(shortcut), m_fullName(fullName) {}
 
             bool draw(const std::string &name) override {
+                std::ignore = name;
+
                 std::string label;
 
                 if (!m_editing)
@@ -262,11 +288,9 @@ namespace hex::plugin::builtin {
 
                 bool settingChanged = false;
 
-                ImGui::BeginDisabled(m_drawShortcut == m_defaultShortcut);
-                if (ImGuiExt::IconButton(ICON_VS_X, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
-                    m_hasDuplicate = !ShortcutManager::updateShortcut(m_shortcut, m_defaultShortcut, m_view);
-
-                    m_drawShortcut = m_defaultShortcut;
+                ImGui::BeginDisabled(m_drawShortcut.matches(m_defaultShortcut));
+                if (ImGui::Button("X", ImGui::GetStyle().FramePadding * 2 + ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()))) {
+                    this->reset();
                     if (!m_hasDuplicate) {
                         m_shortcut = m_defaultShortcut;
                         settingChanged = true;
@@ -282,7 +306,16 @@ namespace hex::plugin::builtin {
 
                 ImGui::SameLine();
 
-                ImGuiExt::TextFormatted("{}", name);
+                std::string fullName;
+                for (u32 i = m_fullName.size() == 1 ? 0 : 1; i < m_fullName.size(); i += 1) {
+                    const auto &part = m_fullName[i];
+                    fullName += Lang(part).get();
+                    fullName += " -> ";
+                }
+                if (fullName.size() >= 4)
+                    fullName = fullName.substr(0, fullName.size() - 4);
+
+                ImGuiExt::TextFormatted("{}", fullName);
 
                 ImGui::PopID();
 
@@ -291,8 +324,9 @@ namespace hex::plugin::builtin {
                         m_editing = false;
                         ShortcutManager::resumeShortcuts();
 
-                            settingChanged = true;
+                        settingChanged = true;
                         if (!m_hasDuplicate) {
+
                         }
                     }
                 }
@@ -324,6 +358,13 @@ namespace hex::plugin::builtin {
                 }
 
                 return keys;
+            }
+
+            void reset() {
+                m_hasDuplicate = !ShortcutManager::updateShortcut(m_shortcut, m_defaultShortcut, m_view);
+
+                m_drawShortcut = m_defaultShortcut;
+                m_shortcut = m_defaultShortcut;
             }
 
         private:
@@ -358,6 +399,7 @@ namespace hex::plugin::builtin {
         private:
             View *m_view = nullptr;
             Shortcut m_shortcut, m_drawShortcut, m_defaultShortcut;
+            std::vector<UnlocalizedString> m_fullName;
             bool m_editing = false;
             bool m_hasDuplicate = false;
         };
@@ -438,8 +480,7 @@ namespace hex::plugin::builtin {
                     ImGui::TableNextColumn();
 
                     // Draw toolbar icon box
-                    ImGuiExt::BeginSubWindow("hex.builtin.setting.toolbar.icons"_lang, ImGui::GetContentRegionAvail());
-                    {
+                    if (ImGuiExt::BeginSubWindow("hex.builtin.setting.toolbar.icons"_lang, nullptr, ImGui::GetContentRegionAvail())) {
                         if (ImGui::BeginTable("##icons", 6, ImGuiTableFlags_SizingStretchSame, ImGui::GetContentRegionAvail())) {
                             ImGui::TableNextRow();
 
@@ -527,7 +568,7 @@ namespace hex::plugin::builtin {
                                 auto max = ImGui::GetItemRectMax();
                                 auto iconSize = ImGui::CalcTextSize(menuItem->icon.glyph.c_str());
 
-                                auto text = Lang(unlocalizedName).get();
+                                std::string text = Lang(unlocalizedName);
                                 if (text.ends_with("..."))
                                     text = text.substr(0, text.size() - 3);
 
@@ -541,6 +582,7 @@ namespace hex::plugin::builtin {
 
                             ImGui::EndTable();
                         }
+
                     }
                     ImGuiExt::EndSubWindow();
 
@@ -558,6 +600,10 @@ namespace hex::plugin::builtin {
                     }
 
                     ImGui::EndTable();
+                }
+
+                if (changed) {
+                    ContentRegistry::Interface::updateToolbarItems();
                 }
 
                 return changed;
@@ -578,12 +624,12 @@ namespace hex::plugin::builtin {
                 if (data.is_null())
                     return;
 
+                for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItemsMutable())
+                    menuItem.toolbarIndex = -1;
+
                 auto toolbarItems = data.get<std::map<i32, std::pair<std::string, u32>>>();
                 if (toolbarItems.empty())
                     return;
-
-                for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItemsMutable())
-                    menuItem.toolbarIndex = -1;
 
                 for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItemsMutable()) {
                     for (const auto &[index, value] : toolbarItems) {
@@ -597,74 +643,57 @@ namespace hex::plugin::builtin {
                 }
 
                 m_currIndex = toolbarItems.size();
+
+                ContentRegistry::Interface::updateToolbarItems();
             }
 
         private:
             i32 m_currIndex = 0;
         };
 
-        class FontFilePicker : public ContentRegistry::Settings::Widgets::FilePicker {
-        public:
-            bool draw(const std::string &name) {
-                bool changed = false;
+        bool getDefaultBorderlessWindowMode() {
+            bool result;
 
-                const auto &fonts = hex::getFonts();
+            #if defined (OS_WINDOWS)
+                result = true;
 
-                bool customFont = false;
-                std::string pathPreview = "";
-                if (m_path.empty()) {
-                    pathPreview = "Default Font";
-                } else if (fonts.contains(m_path)) {
-                    pathPreview = fonts.at(m_path);
-                } else {
-                    pathPreview = wolv::util::toUTF8String(m_path.filename());
-                    customFont = true;
-                }
+                // Intel's OpenGL driver is extremely buggy. Its issues can manifest in lots of different ways
+                // such as "colorful snow" appearing on the screen or, the most annoying issue,
+                // it might draw the window content slightly offset to the bottom right as seen in issue #1625
 
-                if (ImGui::BeginCombo(name.c_str(), pathPreview.c_str())) {
-                    if (ImGui::Selectable("Default Font", m_path.empty())) {
-                        m_path.clear();
-                        changed = true;
-                    }
+                // The latter issue can be circumvented by using the native OS decorations or by using the software renderer.
+                // This code here tries to detect if the user has a problematic Intel GPU and if so, it will default to the native OS decorations.
+                // This doesn't actually solve the issue at all but at least it makes ImHex usable on these GPUs.
+                const bool isIntelGPU = hex::containsIgnoreCase(ImHexApi::System::getGPUVendor(), "Intel");
+                if (isIntelGPU) {
+                    log::warn("Intel GPU detected! Intel's OpenGL GPU drivers are extremely buggy and can cause issues when using ImHex. If you experience any rendering bugs, please enable the Native OS Decoration setting or try the software rendererd -NoGPU release.");
 
-                    if (ImGui::Selectable("Custom Font", customFont)) {
-                        changed = fs::openFileBrowser(fs::DialogMode::Open, { { "TTF Font", "ttf" }, { "OTF Font", "otf" } }, [this](const std::fs::path &path) {
-                            m_path = path;
-                        });
-                    }
+                    // Non-exhaustive list of bad GPUs.
+                    // If more GPUs are found to be problematic, they can be added here.
+                    constexpr static std::array BadGPUs = {
+                        // Sandy Bridge Series, Second Gen HD Graphics
+                        "HD Graphics 2000",
+                        "HD Graphics 3000"
+                    };
 
-                    for (const auto &[path, fontName] : fonts) {
-                        if (ImGui::Selectable(fontName.c_str(), m_path == path)) {
-                            m_path = path;
-                            changed = true;
+                    const auto &glRenderer = ImHexApi::System::getGLRenderer();
+                    for (const auto &badGPU : BadGPUs) {
+                        if (hex::containsIgnoreCase(glRenderer, badGPU)) {
+                            result = false;
+                            break;
                         }
                     }
-
-                    ImGui::EndCombo();
                 }
 
-                return changed;
-            }
-        };
-
-
-        bool getDefaultBorderlessWindowMode() {
-            bool result = false;
-
-            #if defined (OS_WINDOWS) || defined(OS_MACOS)
+            #elif defined(OS_MACOS)
                 result = true;
+            #elif defined(OS_LINUX)
+                // On Linux, things like Window snapping and moving is hard to implement
+                // without hacking e.g. libdecor, therefor we default to the native window decorations.
+                result = false;
+            #else
+                result = false;
             #endif
-
-            // Intel's OpenGL driver has weird bugs that cause the drawn window to be offset to the bottom right.
-            // This can be fixed by either using Mesa3D's OpenGL Software renderer or by simply disabling it.
-            // If you want to try if it works anyways on your GPU, set the hex.builtin.setting.interface.force_borderless_window_mode setting to 1
-            if (ImHexApi::System::isBorderlessWindowModeEnabled()) {
-                const bool isIntelGPU = hex::containsIgnoreCase(ImHexApi::System::getGPUVendor(), "Intel");
-
-                result = !isIntelGPU;
-                if (isIntelGPU)
-                    log::warn("Intel GPU detected! Intel's OpenGL driver has bugs that can cause issues when using ImHex. If you experience any rendering bugs, please try the Mesa3D Software Renderer");
-            }
 
             return result;
         }
@@ -680,6 +709,10 @@ namespace hex::plugin::builtin {
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "", "hex.builtin.setting.general.show_tips", false);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "", "hex.builtin.setting.general.save_recent_providers", true);
             ContentRegistry::Settings::add<AutoBackupWidget>("hex.builtin.setting.general", "", "hex.builtin.setting.general.auto_backup_time");
+            ContentRegistry::Settings::add<Widgets::SliderDataSize>("hex.builtin.setting.general", "", "hex.builtin.setting.general.max_mem_file_size", 512_MiB, 0_bytes, 32_GiB, 1_MiB)
+                .setTooltip("hex.builtin.setting.general.max_mem_file_size.desc");
+            ContentRegistry::Settings::add<Widgets::SliderInteger>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.pattern_data_max_filter_items", 128, 32, 1024);
+
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.auto_load_patterns", true);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.sync_pattern_source", false);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.network", "hex.builtin.setting.general.network_interface", false);
@@ -714,7 +747,18 @@ namespace hex::plugin::builtin {
                                                                   }
                                                               });
 
-            ContentRegistry::Settings::add<ScalingWidget>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.scaling_factor").requiresRestart();
+            ContentRegistry::Settings::add<Widgets::ColorPicker>(
+                "hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.accent",
+                ImGui::GetStyleColorVec4(ImGuiCol_Button),
+                ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoDragDrop | ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoInputs
+            )
+            .setChangedCallback([](auto &widget) {
+                auto colorPicker = static_cast<Widgets::ColorPicker *>(&widget);
+                ThemeManager::setAccentColor(colorPicker->getColor());
+            });
+
+            ContentRegistry::Settings::add<ScalingWidget>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.scaling_factor")
+            .requiresRestart();
 
             #if defined (OS_WEB)
                 ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.crisp_scaling", false)
@@ -734,6 +778,7 @@ namespace hex::plugin::builtin {
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.pattern_data_row_bg", false);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.always_show_provider_tabs", false);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.show_header_command_palette", true);
+            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.display_shortcut_highlights", true);
 
             std::vector<std::string> languageNames;
             std::vector<nlohmann::json> languageCodes;
@@ -760,57 +805,27 @@ namespace hex::plugin::builtin {
                 ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.native_window_decorations", !getDefaultBorderlessWindowMode()).requiresRestart();
             #endif
 
+            #if defined (OS_MACOS)
+                ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.use_native_menu_bar", true);
+            #endif
+
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.restore_window_pos", false);
 
             ContentRegistry::Settings::add<Widgets::ColorPicker>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.highlight_color", ImColor(0x80, 0x80, 0xC0, 0x60));
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.sync_scrolling", false);
+            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.show_selection", false);
+            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.show_highlights", true);
             ContentRegistry::Settings::add<Widgets::SliderInteger>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.byte_padding", 0, 0, 50);
             ContentRegistry::Settings::add<Widgets::SliderInteger>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.char_padding", 0, 0, 50);
 
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.pattern_parent_highlighting", true);
 
-        }
-
-        /* Fonts */
-        {
-            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.font", "hex.builtin.setting.font.glyphs", "hex.builtin.setting.font.load_all_unicode_chars", false)
-                .requiresRestart();
-
-            auto customFontEnabledSetting = ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.custom_font_enable", false).requiresRestart();
-
-            const auto customFontsEnabled = [customFontEnabledSetting] {
-                auto &customFontsEnabled = static_cast<Widgets::Checkbox &>(customFontEnabledSetting.getWidget());
-
-                return customFontsEnabled.isChecked();
-            };
-
-            auto customFontPathSetting = ContentRegistry::Settings::add<FontFilePicker>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.font_path")
-                    .requiresRestart()
-                    .setEnabledCallback(customFontsEnabled);
-
-            const auto customFontSettingsEnabled = [customFontEnabledSetting, customFontPathSetting] {
-                auto &customFontsEnabled = static_cast<Widgets::Checkbox &>(customFontEnabledSetting.getWidget());
-                auto &fontPath = static_cast<Widgets::FilePicker &>(customFontPathSetting.getWidget());
-
-                return customFontsEnabled.isChecked() && !fontPath.getPath().empty();
-            };
-
-            ContentRegistry::Settings::add<Widgets::Label>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.custom_font_info")
-                    .setEnabledCallback(customFontsEnabled);
-
-
-            ContentRegistry::Settings::add<Widgets::SliderInteger>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.font_size", 13, 0, 100)
-                    .requiresRestart()
-                    .setEnabledCallback(customFontSettingsEnabled);
-            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.font_bold", false)
-                    .requiresRestart()
-                    .setEnabledCallback(customFontSettingsEnabled);
-            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.font_italic", false)
-                    .requiresRestart()
-                    .setEnabledCallback(customFontSettingsEnabled);
-            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.font", "hex.builtin.setting.font.custom_font", "hex.builtin.setting.font.font_antialias", true)
-                    .requiresRestart()
-                    .setEnabledCallback(customFontSettingsEnabled);
+            std::vector<std::string> pasteBehaviourNames = { "hex.builtin.setting.hex_editor.paste_behaviour.none", "hex.builtin.setting.hex_editor.paste_behaviour.everything", "hex.builtin.setting.hex_editor.paste_behaviour.selection" };
+            std::vector<nlohmann::json> pasteBehaviourValues = { "none", "everything", "selection" };
+            ContentRegistry::Settings::add<Widgets::DropDown>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.paste_behaviour",
+                                                              pasteBehaviourNames,
+                                                              pasteBehaviourValues,
+                                                              "none");
         }
 
         /* Folders */
@@ -851,7 +866,7 @@ namespace hex::plugin::builtin {
             EventImHexStartupFinished::subscribe([]{
                 for (const auto &[name, experiment] : ContentRegistry::Experiments::impl::getExperiments()) {
                     ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.experiments", "", experiment.unlocalizedName, false)
-                        .setTooltip(Lang(experiment.unlocalizedDescription))
+                        .setTooltip(experiment.unlocalizedDescription)
                         .setChangedCallback([name](Widgets::Widget &widget) {
                             auto checkBox = static_cast<Widgets::Checkbox *>(&widget);
 
@@ -863,14 +878,28 @@ namespace hex::plugin::builtin {
 
         /* Shorcuts */
         {
-            EventImHexStartupFinished::subscribe([]{
+            EventImHexStartupFinished::subscribe([] {
                 for (const auto &shortcutEntry : ShortcutManager::getGlobalShortcuts()) {
-                    ContentRegistry::Settings::add<KeybindingWidget>("hex.builtin.setting.shortcuts", "hex.builtin.setting.shortcuts.global", shortcutEntry.unlocalizedName, nullptr, shortcutEntry.shortcut);
+                    ContentRegistry::Settings::add<KeybindingWidget>(
+                        "hex.builtin.setting.shortcuts",
+                        "hex.builtin.setting.shortcuts.global",
+                        shortcutEntry.unlocalizedName.back(),
+                        nullptr,
+                        shortcutEntry.shortcut,
+                        shortcutEntry.unlocalizedName
+                    );
                 }
 
                 for (auto &[viewName, view] : ContentRegistry::Views::impl::getEntries()) {
                     for (const auto &shortcutEntry : ShortcutManager::getViewShortcuts(view.get())) {
-                        ContentRegistry::Settings::add<KeybindingWidget>("hex.builtin.setting.shortcuts", viewName, shortcutEntry.unlocalizedName, view.get(), shortcutEntry.shortcut);
+                        ContentRegistry::Settings::add<KeybindingWidget>(
+                            "hex.builtin.setting.shortcuts",
+                            viewName,
+                            shortcutEntry.unlocalizedName.back(),
+                            view.get(),
+                            shortcutEntry.shortcut,
+                            shortcutEntry.unlocalizedName
+                        );
                     }
                 }
            });
@@ -883,6 +912,22 @@ namespace hex::plugin::builtin {
             ContentRegistry::Settings::add<ToolbarIconsWidget>("hex.builtin.setting.toolbar", "", "hex.builtin.setting.toolbar.icons");
         }
 
+        ImHexApi::System::addMigrationRoutine("v1.36.3", [] {
+            log::warn("Resetting shortcut key settings for them to work with this version of ImHex");
+
+            for (const auto &category : ContentRegistry::Settings::impl::getSettings()) {
+                for (const auto &subcategory : category.subCategories) {
+                    for (const auto &entry : subcategory.entries) {
+                        if (auto keybindingWidget = dynamic_cast<KeybindingWidget*>(entry.widget.get())) {
+                            keybindingWidget->reset();
+                            ContentRegistry::Settings::write<nlohmann::json>(category.unlocalizedName, entry.unlocalizedName, keybindingWidget->store());
+                        }
+                    }
+                }
+            }
+
+            ContentRegistry::Settings::impl::store();
+        });
     }
 
     static void loadLayoutSettings() {

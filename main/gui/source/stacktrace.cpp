@@ -2,12 +2,26 @@
 #include <hex/helpers/fmt.hpp>
 
 #include <array>
+#include <llvm/Demangle/Demangle.h>
+
+namespace {
+
+    [[maybe_unused]] std::string tryDemangle(const std::string &symbolName) {
+        if (auto variant1 = llvm::demangle(symbolName); variant1 != symbolName)
+            return variant1;
+
+        if (auto variant2 = llvm::demangle(std::string("_") + symbolName); variant2 != std::string("_") + symbolName)
+            return variant2;
+
+        return symbolName;
+    }
+
+}
 
 #if defined(OS_WINDOWS)
 
     #include <windows.h>
     #include <dbghelp.h>
-    #include <llvm/Demangle/Demangle.h>
 
     namespace hex::stacktrace {
 
@@ -15,7 +29,7 @@
 
         }
 
-        std::vector<StackFrame> getStackTrace() {
+        StackTraceResult getStackTrace() {
             std::vector<StackFrame> stackTrace;
 
             HANDLE process = GetCurrentProcess();
@@ -80,20 +94,13 @@
                     fileName = "??";
                 }
 
-                std::string demangledName;
-                if (auto variant1 = llvm::demangle(symbolName); variant1 != symbolName)
-                    demangledName = variant1;
-                else if (auto variant2 = llvm::demangle(std::string("_") + symbolName); variant2 != std::string("_") + symbolName)
-                    demangledName = variant2;
-                else
-                    demangledName = symbolName;
-
+                auto demangledName = tryDemangle(symbolName);
                 stackTrace.push_back(StackFrame { fileName, demangledName, lineNumber });
             }
 
             SymCleanup(process);
 
-            return stackTrace;
+            return StackTraceResult{ stackTrace, "StackWalk" };
         }
 
     }
@@ -103,9 +110,8 @@
     #if __has_include(BACKTRACE_HEADER)
 
         #include BACKTRACE_HEADER
-        #include <llvm/Demangle/Demangle.h>
-        #include <hex/helpers/logger.hpp>
         #include <hex/helpers/utils.hpp>
+        #include <dlfcn.h>
 
         namespace hex::stacktrace {
 
@@ -113,20 +119,27 @@
 
             }
 
-            std::vector<StackFrame> getStackTrace() {
+            StackTraceResult getStackTrace() {
                 static std::vector<StackFrame> result;
 
-                std::array<void*, 128> addresses;
-                size_t count = backtrace(addresses.data(), addresses.size());
-                auto functions = backtrace_symbols(addresses.data(), count);
+                std::array<void*, 128> addresses = {};
+                const size_t count = backtrace(addresses.data(), addresses.size());
 
-                for (size_t i = 0; i < count; i++)
-                    result.push_back(StackFrame { "", functions[i], 0 });
+                Dl_info info;
+                for (size_t i = 0; i < count; i += 1) {
+                    dladdr(addresses[i], &info);
 
-                return result;
+                    auto fileName = info.dli_fname != nullptr ? std::fs::path(info.dli_fname).filename().string() : "??";
+                    auto demangledName = info.dli_sname != nullptr ? tryDemangle(info.dli_sname) : "??";
+
+                    result.push_back(StackFrame { std::move(fileName), std::move(demangledName), 0 });
+                }
+
+                return StackTraceResult{ result, "execinfo" };
             }
 
         }
+
     #endif
 
 #elif defined(HEX_HAS_BACKTRACE)
@@ -134,7 +147,6 @@
     #if __has_include(BACKTRACE_HEADER)
 
         #include BACKTRACE_HEADER
-        #include <llvm/Demangle/Demangle.h>
         #include <hex/helpers/logger.hpp>
         #include <hex/helpers/utils.hpp>
 
@@ -150,7 +162,7 @@
                 }
             }
 
-            std::vector<StackFrame> getStackTrace() {
+            StackTraceResult getStackTrace() {
                 static std::vector<StackFrame> result;
 
                 result.clear();
@@ -161,14 +173,14 @@
                         if (function == nullptr)
                             function = "??";
 
-                        result.push_back(StackFrame { std::fs::path(fileName).filename().string(), llvm::demangle(function), u32(lineNumber) });
+                        result.push_back(StackFrame { std::fs::path(fileName).filename().string(), tryDemangle(function), u32(lineNumber) });
 
                         return 0;
                     }, nullptr, nullptr);
 
                 }
 
-                return result;
+                return StackTraceResult{ result, "backtrace" };
             }
 
         }
@@ -180,8 +192,12 @@
     namespace hex::stacktrace {
 
         void initialize() { }
-        std::vector<StackFrame> getStackTrace() { return { StackFrame { "??", "Stacktrace collecting not available!", 0 } }; }
-
+        StackTraceResult getStackTrace() {
+            return StackTraceResult {
+                {StackFrame { "??", "Stacktrace collecting not available!", 0 }},
+                "none"
+            };
+        }
     }
     
 #endif

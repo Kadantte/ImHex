@@ -22,6 +22,11 @@
 #if IMHEX_FEATURE_ENABLED(ZSTD)
     #include <zstd.h>
 #endif
+#if IMHEX_FEATURE_ENABLED(LZ4)
+    #include <lz4.h>
+    #include <lz4frame.h>
+#endif
+
 
 namespace hex::plugin::decompress {
 
@@ -54,7 +59,7 @@ namespace hex::plugin::decompress {
 
                 z_stream stream = { };
                 if (inflateInit2(&stream, windowSize) != Z_OK) {
-                    return false;
+                    return 0;
                 }
 
                 section.resize(100);
@@ -74,21 +79,25 @@ namespace hex::plugin::decompress {
                         section.resize(section.size() - stream.avail_out);
                         break;
                     }
-                    if (res != Z_OK)
-                        return false;
+                    if (res != Z_OK) {
+                        section.resize(section.size() - stream.avail_out);
+                        return stream.next_in - compressedData.data();
+                    }
 
                     if (stream.avail_out != 0)
                         break;
 
-                    section.resize(section.size() * 2);
-                    stream.next_out  = section.data();
-                    stream.avail_out = section.size();
+                    const auto prevSectionSize = section.size();
+                    section.resize(prevSectionSize * 2);
+                    stream.next_out  = section.data() + prevSectionSize;
+                    stream.avail_out = prevSectionSize;
                 }
 
-                return true;
+                return stream.next_in - compressedData.data();
             #else
-                hex::unused(evaluator, params);
-                err::E0012.throwError("hex::dec::zlib_decompress is not available. Please recompile with zlib support.");
+                std::ignore = evaluator;
+                std::ignore = params;
+                err::E0012.throwError("hex::dec::zlib_decompress is not available. Please recompile ImHex with zlib support.");
             #endif
         });
 
@@ -100,7 +109,7 @@ namespace hex::plugin::decompress {
 
                 bz_stream stream = { };
                 if (BZ2_bzDecompressInit(&stream, 0, 1) != Z_OK) {
-                    return false;
+                    return 0;
                 }
 
                 section.resize(100);
@@ -120,21 +129,25 @@ namespace hex::plugin::decompress {
                         section.resize(section.size() - stream.avail_out);
                         break;
                     }
-                    if (res != BZ_OK)
-                        return false;
+                    if (res != BZ_OK) {
+                        section.resize(section.size() - stream.avail_out);
+                        return reinterpret_cast<const u8*>(stream.next_in) - compressedData.data();
+                    }
 
                     if (stream.avail_out != 0)
                         break;
 
-                    section.resize(section.size() * 2);
-                    stream.next_out  = reinterpret_cast<char*>(section.data());
-                    stream.avail_out = section.size();
+                    const auto prevSectionSize = section.size();
+                    section.resize(prevSectionSize * 2);
+                    stream.next_out  = reinterpret_cast<char*>(section.data()) + prevSectionSize;
+                    stream.avail_out = prevSectionSize;
                 }
 
-                return true;
+                return reinterpret_cast<const u8*>(stream.next_in) - compressedData.data();
             #else
-                hex::unused(evaluator, params);
-                err::E0012.throwError("hex::dec::bzlib_decompress is not available. Please recompile with bzip2 support.");
+                std::ignore = evaluator;
+                std::ignore = params;
+                err::E0012.throwError("hex::dec::bzlib_decompress is not available. Please recompile ImHex with bzip2 support.");
             #endif
 
         });
@@ -146,8 +159,9 @@ namespace hex::plugin::decompress {
                 auto &section = evaluator->getSection(params[1].toUnsigned());
 
                 lzma_stream stream = LZMA_STREAM_INIT;
-                if (lzma_auto_decoder(&stream, 0x10000, LZMA_IGNORE_CHECK) != Z_OK) {
-                    return false;
+                constexpr int64_t memlimit = 0x40000000;  // 1GiB
+                if (lzma_auto_decoder(&stream, memlimit, LZMA_IGNORE_CHECK) != LZMA_OK) {
+                    return 0;
                 }
 
                 section.resize(100);
@@ -163,25 +177,38 @@ namespace hex::plugin::decompress {
 
                 while (stream.avail_in != 0) {
                     auto res = lzma_code(&stream, LZMA_RUN);
-                    if (res == BZ_STREAM_END) {
+                    if (res == LZMA_STREAM_END) {
                         section.resize(section.size() - stream.avail_out);
                         break;
                     }
-                    if (res != LZMA_OK && res != LZMA_STREAM_END)
-                        return false;
+
+                    if (res == LZMA_MEMLIMIT_ERROR) {
+                        auto usage = lzma_memusage(&stream);
+                        evaluator->getConsole().log(pl::core::LogConsole::Level::Warning, fmt::format("lzma_decompress memory usage {} bytes would exceed the limit ({} bytes), aborting", usage, memlimit));
+
+                        section.resize(section.size() - stream.avail_out);
+                        return stream.next_in - compressedData.data();
+                    }
+
+                    if (res != LZMA_OK) {
+                        section.resize(section.size() - stream.avail_out);
+                        return stream.next_in - compressedData.data();
+                    }
 
                     if (stream.avail_out != 0)
                         break;
 
-                    section.resize(section.size() * 2);
-                    stream.next_out = compressedData.data();
-                    stream.avail_out = compressedData.size();
+                    const auto prevSectionSize = section.size();
+                    section.resize(prevSectionSize * 2);
+                    stream.next_out  = section.data() + prevSectionSize;
+                    stream.avail_out = prevSectionSize;
                 }
 
-                return true;
+                return stream.next_in - compressedData.data();
             #else
-                hex::unused(evaluator, params);
-                err::E0012.throwError("hex::dec::lzma_decompress is not available. Please recompile with liblzma support.");
+                std::ignore = evaluator;
+                std::ignore = params;
+                err::E0012.throwError("hex::dec::lzma_decompress is not available. Please recompile ImHex with liblzma support.");
             #endif
         });
 
@@ -193,7 +220,7 @@ namespace hex::plugin::decompress {
 
                 ZSTD_DCtx* dctx = ZSTD_createDCtx();
                 if (dctx == nullptr) {
-                    return false;
+                    return 0;
                 }
 
                 ON_SCOPE_EXIT {
@@ -203,30 +230,116 @@ namespace hex::plugin::decompress {
                 const u8* source = compressedData.data();
                 size_t sourceSize = compressedData.size();
 
-                do {
-                    size_t blockSize = ZSTD_getFrameContentSize(source, sourceSize);
+                size_t blockSize = ZSTD_getFrameContentSize(source, sourceSize);
 
-                    if (blockSize == ZSTD_CONTENTSIZE_ERROR) {
-                        return false;
+                if (blockSize == ZSTD_CONTENTSIZE_ERROR) {
+                    return 0;
+                }
+
+                if (blockSize == ZSTD_CONTENTSIZE_UNKNOWN) {
+                    // Data uses stream compression
+                    ZSTD_inBuffer dataIn = { (void*)source, sourceSize, 0 };
+
+                    size_t outSize = ZSTD_DStreamOutSize();
+                    std::vector<u8> outVec(outSize);
+                    const u8* out = outVec.data();
+
+                    size_t lastRet = 0;
+                    while (dataIn.pos < dataIn.size) {
+                        ZSTD_outBuffer dataOut = { (void*)out, outSize, 0 };
+
+                        size_t ret = ZSTD_decompressStream(dctx, &dataOut, &dataIn);
+                        if (ZSTD_isError(ret)) {
+                            section.resize(section.size() - (dataOut.size - dataOut.pos));
+                            return i128(dataIn.pos);
+                        }
+                        lastRet = ret;
+
+                        size_t sectionSize = section.size();
+                        section.resize(sectionSize + dataOut.pos);
+                        std::memcpy(section.data() + sectionSize, out, dataOut.pos);
                     }
 
+                    // Incomplete frame
+                    if (lastRet != 0) {
+                        return i128(dataIn.pos);
+                    }
+                } else {
                     section.resize(section.size() + blockSize);
 
-                    size_t decodedSize = ZSTD_decompressDCtx(dctx, section.data() + section.size() - blockSize, blockSize, source, sourceSize);
+                    size_t ret = ZSTD_decompressDCtx(dctx, section.data() + section.size() - blockSize, blockSize, source, sourceSize);
 
-                    if (ZSTD_isError(decodedSize)) {
-                        return false;
+                    if (ZSTD_isError(ret)) {
+                        return 0;
+                    }
+                }
+
+                return i128(sourceSize);
+            #else
+                std::ignore = evaluator;
+                std::ignore = params;
+                err::E0012.throwError("hex::dec::zstd_decompress is not available. Please recompile ImHex with zstd support.");
+            #endif
+        });
+
+        /* lz4_decompress(compressed_pattern, section_id) */
+        ContentRegistry::PatternLanguage::addFunction(nsHexDec, "lz4_decompress", FunctionParameterCount::exactly(3), [](Evaluator *evaluator, auto params) -> std::optional<Token::Literal> {
+            #if IMHEX_FEATURE_ENABLED(LZ4)
+                auto compressedData = getCompressedData(evaluator, params[0]);
+                auto &section = evaluator->getSection(params[1].toUnsigned());
+                bool frame = params[2].toBoolean();
+
+                if (frame) {
+                    LZ4F_decompressionContext_t dctx;
+                    LZ4F_errorCode_t err = LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION);
+                    if (LZ4F_isError(err)) {
+                       return 0;
                     }
 
-                    source = source + sourceSize;
-                    sourceSize = 0;
+                    std::vector<u8> outBuffer(1024 * 1024);
 
-                } while (sourceSize > 0);
+                    const u8* sourcePointer = compressedData.data();
+                    size_t srcSize = compressedData.size();
 
-                return true;
+                    while (srcSize > 0) {
+                        u8* dstPtr = outBuffer.data();
+                        size_t dstCapacity = outBuffer.size();
+
+                        size_t ret = LZ4F_decompress(dctx, dstPtr, &dstCapacity, sourcePointer, &srcSize, nullptr);
+                        if (LZ4F_isError(ret)) {
+                            LZ4F_freeDecompressionContext(dctx);
+                            return sourcePointer - compressedData.data();
+                        }
+
+                        section.insert(section.end(), outBuffer.begin(), outBuffer.begin() + dstCapacity);
+                        sourcePointer += (compressedData.size() - srcSize);
+                    }
+
+                    LZ4F_freeDecompressionContext(dctx);
+
+                    return sourcePointer - compressedData.data();
+                } else {
+                    section.resize(1024 * 1024);
+
+                    while (true) {
+                        auto decompressedSize = LZ4_decompress_safe(reinterpret_cast<const char*>(compressedData.data()), reinterpret_cast<char *>(section.data()), compressedData.size(), static_cast<int>(section.size()));
+
+                        if (decompressedSize < 0) {
+                            return 0;
+                        } else if (decompressedSize > 0) {
+                            // Successful decompression
+                            section.resize(decompressedSize);
+                            return i128(compressedData.size());
+                        } else {
+                            // Buffer too small, resize and try again
+                            section.resize(section.size() * 2);
+                        }
+                    }
+                }
             #else
-                hex::unused(evaluator, params);
-                err::E0012.throwError("hex::dec::zstd_decompress is not available. Please recompile with zstd support.");
+                std::ignore = evaluator;
+                std::ignore = params;
+                err::E0012.throwError("hex::dec::lz4_decompress is not available. Please recompile ImHex with liblz4 support.");
             #endif
         });
     }

@@ -1,3 +1,4 @@
+#include <fonts/vscode_icons.hpp>
 #include <hex/plugin.hpp>
 #include <hex/api/content_registry.hpp>
 #include <hex/api/task_manager.hpp>
@@ -15,7 +16,7 @@ using namespace hex;
 using namespace hex::script::loader;
 
 using ScriptLoaders = std::tuple<
-    #if defined(DOTNET_PLUGINS)
+    #if defined(IMHEX_DOTNET_SCRIPT_SUPPORT)
         DotNetLoader
     #endif
 >;
@@ -27,23 +28,36 @@ namespace {
     void loadScript(std::vector<const Script*> &scripts, auto &loader) {
         loader.loadAll();
 
-        for (auto &script : loader.getScripts())
+        for (auto &script : std::as_const(loader).getScripts())
             scripts.emplace_back(&script);
     }
 
-    std::vector<const Script*> loadAllScripts() {
-        std::vector<const Script*> plugins;
+std::vector<const Script*> loadAllScripts() {
+    std::vector<const Script*> scripts;
 
-        try {
-            std::apply([&plugins](auto&&... args) {
-                (loadScript(plugins, args), ...);
-            }, s_loaders);
-        } catch (const std::exception &e) {
-            log::error("Error when loading scripts: {}", e.what());
-        }
-
-        return plugins;
+    try {
+        std::apply([&scripts](auto&&... args) {
+            (loadScript(scripts, std::forward<decltype(args)>(args)), ...);
+        }, s_loaders);
+    } catch (const std::exception &e) {
+        log::error("Error when loading scripts: {}", e.what());
+        return {}; 
     }
+
+    std::vector<hex::Feature> features;
+    features.reserve(scripts.size()); 
+
+    for (const auto &script : scripts) {
+        if (script->background) {
+            features.emplace_back(script->name, true);
+        }
+    }
+
+    IMHEX_PLUGIN_FEATURES = std::move(features); 
+
+    return scripts;
+}
+
 
     void initializeLoader(u32 &count, auto &loader) {
         try {
@@ -74,11 +88,11 @@ namespace {
         hex::ContentRegistry::Interface::addMenuItemSubMenu({ "hex.builtin.menu.extras" }, 5000, [] {
             static bool menuJustOpened = true;
 
-            if (ImGui::BeginMenu("hex.script_loader.menu.run_script"_lang)) {
+            if (ImGui::BeginMenuEx("hex.script_loader.menu.run_script"_lang, ICON_VS_LIBRARY)) {
                 if (menuJustOpened) {
                     menuJustOpened = false;
                     if (!updaterTask.isRunning()) {
-                        updaterTask = TaskManager::createBackgroundTask("Updating Scripts...", [] (auto&) {
+                        updaterTask = TaskManager::createBackgroundTask("hex.script_loader.task.updating"_lang, [] (auto&) {
                             scripts = loadAllScripts();
                         });
                     }
@@ -91,10 +105,12 @@ namespace {
                 }
 
                 for (const auto &script : scripts) {
-                    const auto &[name, entryPoint] = *script;
+                    const auto &[name, path, background, entryPoint, loader] = *script;
+                    if (background)
+                        continue;
 
-                    if (ImGui::MenuItem(name.c_str())) {
-                        runnerTask = TaskManager::createTask("Running script...", TaskManager::NoProgress, [entryPoint](auto&) {
+                    if (ImGui::MenuItem(name.c_str(), loader->getTypeName().c_str())) {
+                        runnerTask = TaskManager::createTask("hex.script_loader.task.running"_lang, TaskManager::NoProgress, [entryPoint](auto&) {
                             entryPoint();
                         });
                     }
@@ -108,7 +124,7 @@ namespace {
             return !runnerTask.isRunning();
         });
 
-        updaterTask = TaskManager::createBackgroundTask("Updating Scripts...", [] (auto&) {
+        updaterTask = TaskManager::createBackgroundTask("hex.script_loader.task.updating"_lang, [] (auto&) {
             scripts = loadAllScripts();
         });
     }

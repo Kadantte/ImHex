@@ -38,7 +38,7 @@ namespace hex::ui {
                 return m_unsyncedPosition.get(m_provider);
         }
 
-        const ImS64& get() const {
+        [[nodiscard]] const ImS64& get() const {
             if (m_synced)
                 return m_syncedPosition;
             else
@@ -73,7 +73,6 @@ namespace hex::ui {
     class HexEditor {
     public:
         explicit HexEditor(prv::Provider *provider = nullptr);
-        ~HexEditor();
         void draw(float height = ImGui::GetContentRegionAvail().y);
 
         HexEditor(const HexEditor&) = default;
@@ -87,16 +86,22 @@ namespace hex::ui {
             m_currValidRegion = { Region::Invalid(), false };
             m_scrollPosition.setProvider(provider);
         }
-        prv::Provider* getProvider() const {
+
+        [[nodiscard]] prv::Provider* getProvider() const {
             return m_provider;
         }
 
         void setUnknownDataCharacter(char character) { m_unknownDataCharacter = character; }
     private:
-        enum class CellType { None, Hex, ASCII };
+        enum class CellType : u8 { None, Hex, ASCII };
+        enum class AddressFormat : u8 { Hexadecimal, Decimal, Octal };
 
-        void drawCell(u64 address, const u8 *data, size_t size, bool hovered, CellType cellType);
-        void drawSelectionFrame(u32 x, u32 y, Region selection, u64 byteAddress, u16 bytesPerCell, const ImVec2 &cellPos, const ImVec2 &cellSize, const ImColor &backgroundColor) const;
+        void drawCell(u64 address, u8 *data, size_t size, bool hovered, CellType cellType);
+        void drawSeparatorLine(u64 address, bool drawVerticalConnector);
+        void drawFrame(u32 x, u32 y, Region region, u64 byteAddress, u16 bytesPerCell, const ImVec2 &cellPos, const ImVec2 &cellSize, const ImColor &frameColor) const;
+        void drawInsertCursor(Region region, u64 byteAddress, const ImVec2 &cellPos, const ImVec2 &cellSize, const ImColor &frameColor) const;
+        void drawBackgroundHighlight(const ImVec2 &cellPos, const ImVec2 &cellSize, const ImColor &backgroundColor) const;
+        void drawSelection(u32 x, u32 y, Region region, u64 byteAddress, u16 bytesPerCell, const ImVec2 &cellPos, const ImVec2 &cellSize, const ImColor &frameColor) const;
         void drawEditor(const ImVec2 &size);
         void drawFooter(const ImVec2 &size);
         void drawTooltip(u64 address, const u8 *data, size_t size) const;
@@ -106,6 +111,8 @@ namespace hex::ui {
         void handleSelection(u64 address, u32 bytesPerCell, const u8 *data, bool cellHovered);
         std::optional<color_t> applySelectionColor(u64 byteAddress, std::optional<color_t> color);
 
+        std::string formatAddress(u64 address, u32 width = 2, bool prefix = false) const;
+
     public:
         void setSelectionUnchecked(std::optional<u64> start, std::optional<u64> end) {
             m_selectionStart = start;
@@ -114,7 +121,7 @@ namespace hex::ui {
         }
         void setSelection(const Region &region) { this->setSelection(region.getStartAddress(), region.getEndAddress()); }
         void setSelection(u128 start, u128 end) {
-            if (!ImHexApi::Provider::isValid())
+            if (!ImHexApi::Provider::isValid() || m_provider == nullptr)
                 return;
 
             if (start > m_provider->getBaseAddress() + m_provider->getActualSize())
@@ -156,6 +163,11 @@ namespace hex::ui {
                 EventRegionSelected::post(ImHexApi::HexEditor::ProviderRegion{ { selection.address, selection.size }, m_provider });
                 m_shouldModifyValue = true;
             }
+
+            if (m_mode == Mode::Insert) {
+                m_selectionStart = m_selectionEnd;
+                m_cursorBlinkTimer = -0.3F;
+            }
         }
 
         [[nodiscard]] Region getSelection() const {
@@ -191,6 +203,7 @@ namespace hex::ui {
         }
 
         void jumpIfOffScreen() {
+            m_shouldScrollToSelection = true;
             m_shouldJumpWhenOffScreen = true;
         }
 
@@ -224,10 +237,6 @@ namespace hex::ui {
 
         void enableShowAscii(bool showAscii) {
             m_showAscii = showAscii;
-        }
-
-        void enableShowHumanReadableUnits(bool showHumanReadableUnits) {
-            m_showHumanReadableUnits = showHumanReadableUnits;
         }
 
         void enableSyncScrolling(bool syncScrolling) {
@@ -268,8 +277,16 @@ namespace hex::ui {
             m_backgroundColorCallback = callback;
         }
 
+        void setHoverChangedCallback(const std::function<void(u64, size_t)> &callback) {
+            m_hoverChangedCallback = callback;
+        }
+
         void setTooltipCallback(const std::function<void(u64, const u8 *, size_t)> &callback) {
             m_tooltipCallback = callback;
+        }
+
+        void setShowSelectionInFooter(bool showSelection) {
+            m_showSelectionInFooter = showSelection;
         }
 
         [[nodiscard]] i64 getScrollPosition() {
@@ -294,6 +311,30 @@ namespace hex::ui {
             m_editingAddress = std::nullopt;
         }
 
+        enum class Mode : u8 {
+            Overwrite,
+            Insert
+        };
+
+        void setMode(Mode mode) {
+            if (mode == Mode::Insert) {
+                // Don't enter insert mode if the provider doesn't support resizing the underlying data
+                if (!m_provider->isResizable())
+                    return;
+
+                // Get rid of any selection in insert mode
+                m_selectionStart = m_selectionEnd;
+                m_cursorPosition = m_selectionEnd;
+                m_selectionChanged = true;
+            }
+
+            m_mode = mode;
+        }
+
+        [[nodiscard]] Mode getMode() const {
+            return m_mode;
+        }
+
     private:
         prv::Provider *m_provider = nullptr;
 
@@ -302,10 +343,14 @@ namespace hex::ui {
         std::optional<u64> m_cursorPosition;
         ScrollPosition m_scrollPosition;
 
+        Region m_frameStartSelectionRegion = Region::Invalid();
+        Region m_hoveredRegion = Region::Invalid();
+
         u16 m_bytesPerRow = 16;
         std::endian m_dataVisualizerEndianness = std::endian::little;
         std::shared_ptr<ContentRegistry::HexEditor::DataVisualizer> m_currDataVisualizer;
         char m_unknownDataCharacter = '?';
+        u64 m_separatorStride = 0;
 
         bool m_shouldJumpToSelection = false;
         float m_jumpPivot = 0.0F;
@@ -318,11 +363,14 @@ namespace hex::ui {
         u16 m_visibleRowCount = 0;
 
         CellType m_editingCellType = CellType::None;
+        AddressFormat m_addressFormat = AddressFormat::Hexadecimal;
         std::optional<u64> m_editingAddress;
         bool m_shouldModifyValue = false;
         bool m_enteredEditingMode = false;
         bool m_shouldUpdateEditingValue = false;
         std::vector<u8> m_editingBytes;
+        u32 m_maxFittingColumns = 16;
+        bool m_autoFitColumns = false;
 
         std::shared_ptr<ContentRegistry::HexEditor::MiniMapVisualizer> m_miniMapVisualizer;
 
@@ -332,8 +380,8 @@ namespace hex::ui {
         bool m_showAscii = true;
         bool m_showCustomEncoding = true;
         bool m_showMiniMap = false;
+        bool m_showSelectionInFooter = false;
         int m_miniMapWidth = 5;
-        bool m_showHumanReadableUnits = true;
         u32 m_byteCellPadding = 0, m_characterCellPadding = 0;
         bool m_footerCollapsed = true;
 
@@ -345,7 +393,11 @@ namespace hex::ui {
         static std::optional<color_t> defaultColorCallback(u64, const u8 *, size_t) { return std::nullopt; }
         static void defaultTooltipCallback(u64, const u8 *, size_t) {  }
         std::function<std::optional<color_t>(u64, const u8 *, size_t)> m_foregroundColorCallback = defaultColorCallback, m_backgroundColorCallback = defaultColorCallback;
+        std::function<void(u64, size_t)> m_hoverChangedCallback = [](auto, auto){ };
         std::function<void(u64, const u8 *, size_t)> m_tooltipCallback = defaultTooltipCallback;
+
+        Mode m_mode = Mode::Overwrite;
+        float m_cursorBlinkTimer = -0.3F;
     };
 
 }

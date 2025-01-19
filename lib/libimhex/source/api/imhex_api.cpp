@@ -11,16 +11,26 @@
 #include <wolv/utils/string.hpp>
 
 #include <utility>
+#include <numeric>
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <set>
+#include <algorithm>
 #include <GLFW/glfw3.h>
+
+#include <hex/helpers/utils_macos.hpp>
 
 #if defined(OS_WINDOWS)
     #include <windows.h>
+    #include <DSRole.h>
 #else
     #include <sys/utsname.h>
     #include <unistd.h>
+#endif
+
+#if defined(OS_WEB)
+    #include <emscripten.h>
 #endif
 
 namespace hex {
@@ -75,7 +85,11 @@ namespace hex {
 
             static AutoReset<std::optional<ProviderRegion>> s_currentSelection;
             void setCurrentSelection(const std::optional<ProviderRegion> &region) {
-                *s_currentSelection = region;
+                if (region == Region::Invalid()) {
+                    clearSelection();
+                } else {
+                    *s_currentSelection = region;
+                }
             }
 
             static PerProvider<std::optional<Region>> s_hoveredRegion;
@@ -178,24 +192,24 @@ namespace hex {
             impl::s_hoveringFunctions->erase(id);
         }
 
-        static u32 tooltipId = 0;
+        static u32 s_tooltipId = 0;
         u32 addTooltip(Region region, std::string value, color_t color) {
-            tooltipId++;
-            impl::s_tooltips->insert({ tooltipId, { region, std::move(value), color } });
+            s_tooltipId++;
+            impl::s_tooltips->insert({ s_tooltipId, { region, std::move(value), color } });
 
-            return tooltipId;
+            return s_tooltipId;
         }
 
         void removeTooltip(u32 id) {
             impl::s_tooltips->erase(id);
         }
 
-        static u32 tooltipFunctionId;
+        static u32 s_tooltipFunctionId;
         u32 addTooltipProvider(TooltipFunction function) {
-            tooltipFunctionId++;
-            impl::s_tooltipFunctions->insert({ tooltipFunctionId, std::move(function) });
+            s_tooltipFunctionId++;
+            impl::s_tooltipFunctions->insert({ s_tooltipFunctionId, std::move(function) });
 
-            return tooltipFunctionId;
+            return s_tooltipFunctionId;
         }
 
         void removeTooltipProvider(u32 id) {
@@ -212,7 +226,7 @@ namespace hex {
         }
 
         void clearSelection() {
-            impl::s_currentSelection.reset();
+            impl::s_currentSelection->reset();
         }
 
         void setSelection(const Region &region, prv::Provider *provider) {
@@ -262,18 +276,20 @@ namespace hex {
 
         static i64 s_currentProvider = -1;
         static AutoReset<std::vector<std::unique_ptr<prv::Provider>>> s_providers;
+        static AutoReset<std::map<prv::Provider*, std::unique_ptr<prv::Provider>>> s_providersToRemove;
 
         namespace impl {
 
-            static std::vector<prv::Provider*> s_closingProviders;
+            static std::set<prv::Provider*> s_closingProviders;
             void resetClosingProvider() {
                 s_closingProviders.clear();
             }
 
-            const std::vector<prv::Provider*>& getClosingProviders() {
+            std::set<prv::Provider*> getClosingProviders() {
                 return s_closingProviders;
             }
 
+            static std::recursive_mutex s_providerMutex;
         }
 
         prv::Provider *get() {
@@ -293,6 +309,8 @@ namespace hex {
         }
 
         void setCurrentProvider(i64 index) {
+            std::scoped_lock lock(impl::s_providerMutex);
+
             if (TaskManager::getRunningTaskCount() > 0)
                 return;
 
@@ -306,6 +324,8 @@ namespace hex {
         }
 
         void setCurrentProvider(NonNull<prv::Provider*> provider) {
+            std::scoped_lock lock(impl::s_providerMutex);
+
             if (TaskManager::getRunningTaskCount() > 0)
                 return;
 
@@ -325,7 +345,11 @@ namespace hex {
         }
 
         void markDirty() {
-            get()->markDirty();
+            const auto provider = get();
+            if (!provider->isDirty()) {
+                provider->markDirty();
+                EventProviderDirtied::post(provider);
+            }
         }
 
         void resetDirty() {
@@ -340,6 +364,8 @@ namespace hex {
         }
 
         void add(std::unique_ptr<prv::Provider> &&provider, bool skipLoadInterface, bool select) {
+            std::scoped_lock lock(impl::s_providerMutex);
+
             if (TaskManager::getRunningTaskCount() > 0)
                 return;
 
@@ -354,6 +380,8 @@ namespace hex {
         }
 
         void remove(prv::Provider *provider, bool noQuestions) {
+            std::scoped_lock lock(impl::s_providerMutex);
+
             if (provider == nullptr)
                  return;
 
@@ -361,7 +389,7 @@ namespace hex {
                 return;
 
             if (!noQuestions) {
-                impl::s_closingProviders.push_back(provider);
+                impl::s_closingProviders.insert(provider);
 
                 bool shouldClose = true;
                 EventProviderClosing::post(provider, &shouldClose);
@@ -409,20 +437,38 @@ namespace hex {
                 }
             }
 
-            provider->close();
-            EventProviderClosed::post(provider);
+            static std::mutex eraseMutex;
+
+            // Move provider over to a list of providers to delete
+            eraseMutex.lock();
+            auto providerToRemove = it->get();
+            (*s_providersToRemove)[providerToRemove] = std::move(*it);
+            eraseMutex.unlock();
+
+            // Remove left over references from the main provider list
+            s_providers->erase(it);
+            impl::s_closingProviders.erase(provider);
+
+            if (s_currentProvider >= i64(s_providers->size()) && !s_providers->empty())
+                setCurrentProvider(s_providers->size() - 1);
+
+            if (s_providers->empty())
+                EventProviderChanged::post(provider, nullptr);
+
+            EventProviderClosed::post(it->get());
             RequestUpdateWindowTitle::post();
 
-            TaskManager::runWhenTasksFinished([it, provider] {
-                EventProviderDeleted::post(provider);
-                std::erase(impl::s_closingProviders, provider);
+            // Do the destruction of the provider in the background once all tasks have finished
+            TaskManager::runWhenTasksFinished([providerToRemove] {
+                EventProviderDeleted::post(providerToRemove);
+                TaskManager::createBackgroundTask("Closing Provider", [providerToRemove](Task &) {
+                    eraseMutex.lock();
+                    auto provider = std::move((*s_providersToRemove)[providerToRemove]);
+                    s_providersToRemove->erase(providerToRemove);
+                    eraseMutex.unlock();
 
-                s_providers->erase(it);
-                if (s_currentProvider >= i64(s_providers->size()))
-                    setCurrentProvider(0);
-
-                if (s_providers->empty())
-                    EventProviderChanged::post(provider, nullptr);
+                    provider->close();
+                });
             });
         }
 
@@ -436,7 +482,6 @@ namespace hex {
     }
 
     namespace ImHexApi::System {
-
 
         namespace impl {
 
@@ -497,6 +542,11 @@ namespace hex {
             static AutoReset<std::string> s_gpuVendor;
             void setGPUVendor(const std::string &vendor) {
                 s_gpuVendor = vendor;
+            }
+
+            static AutoReset<std::string> s_glRenderer;
+            void setGLRenderer(const std::string &renderer) {
+                s_glRenderer = renderer;
             }
 
             static AutoReset<std::map<std::string, std::string>> s_initArguments;
@@ -566,6 +616,32 @@ namespace hex {
             return impl::s_nativeScale;
         }
 
+        float getBackingScaleFactor() {
+            #if defined(OS_WINDOWS)
+                return 1.0F;
+            #elif defined(OS_MACOS)
+                return ::getBackingScaleFactor();
+            #elif defined(OS_LINUX)
+                if (std::string_view(::getenv("XDG_SESSION_TYPE")) == "x11")
+                    return 1.0F;
+                else {
+                    float xScale = 0, yScale = 0;
+                    glfwGetMonitorContentScale(glfwGetPrimaryMonitor(), &xScale, &yScale);
+
+                    return std::midpoint(xScale, yScale);
+                }
+            #elif defined(OS_WEB)
+                return 1.0F;
+                /*
+                return EM_ASM_INT({
+                    return window.devicePixelRatio;
+                });
+                */
+            #else
+                return 1.0F;
+            #endif
+        }
+
 
         ImVec2 getMainWindowPosition() {
             if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != ImGuiConfigFlags_None)
@@ -598,6 +674,19 @@ namespace hex {
         std::optional<InitialWindowProperties> getInitialWindowProperties() {
             return impl::s_initialWindowProperties;
         }
+
+        void* getLibImHexModuleHandle() {
+            return hex::getContainingModule(reinterpret_cast<void*>(&getLibImHexModuleHandle));
+        }
+
+        void addMigrationRoutine(SemanticVersion migrationVersion, std::function<void()> function) {
+            EventImHexUpdated::subscribe([migrationVersion, function](const SemanticVersion &oldVersion, const SemanticVersion &newVersion) {
+                if (oldVersion < migrationVersion && newVersion >= migrationVersion) {
+                    function();
+                }
+            });
+        }
+
 
         const std::map<std::string, std::string>& getInitArguments() {
             return *impl::s_initArguments;
@@ -638,6 +727,31 @@ namespace hex {
             return impl::s_gpuVendor;
         }
 
+        const std::string &getGLRenderer() {
+            return impl::s_glRenderer;
+        }
+
+        bool isCorporateEnvironment() {
+            #if defined(OS_WINDOWS)
+                {
+                    DSROLE_PRIMARY_DOMAIN_INFO_BASIC * info;
+                    if ((DsRoleGetPrimaryDomainInformation(NULL, DsRolePrimaryDomainInfoBasic, (PBYTE *)&info) == ERROR_SUCCESS) && (info != nullptr))
+                    {
+                        bool result = std::wstring(info->DomainNameFlat).empty();
+                        DsRoleFreeMemory(info);
+
+                        return result;
+                    } else {
+                        DWORD size = 1024;
+                        ::GetComputerNameExA(ComputerNameDnsDomain, nullptr, &size);
+                        return size > 0;
+                    }
+                }
+            #else
+                return false;
+            #endif
+        }
+
         bool isPortableVersion() {
             static std::optional<bool> portable;
             if (portable.has_value())
@@ -658,7 +772,11 @@ namespace hex {
             #if defined(OS_WINDOWS)
                 return "Windows";
             #elif defined(OS_LINUX)
-                return "Linux";
+                #if defined(OS_FREEBSD)
+                    return "FreeBSD";
+                #else
+                    return "Linux";
+                #endif
             #elif defined(OS_MACOS)
                 return "macOS";
             #elif defined(OS_WEB)
@@ -720,16 +838,30 @@ namespace hex {
             #endif
         }
 
-        std::string getImHexVersion(bool withBuildType) {
-            #if defined IMHEX_VERSION
-                if (withBuildType) {
-                    return IMHEX_VERSION;
-                } else {
-                    auto version = std::string(IMHEX_VERSION);
-                    return version.substr(0, version.find('-'));
+        std::optional<LinuxDistro> getLinuxDistro() {
+            wolv::io::File file("/etc/os-release", wolv::io::File::Mode::Read);
+            std::string name;
+            std::string version;
+
+            auto fileContent = file.readString();
+            for (const auto &line : wolv::util::splitString(fileContent, "\n")) {
+                if (line.find("PRETTY_NAME=") != std::string::npos) {
+                    name = line.substr(line.find("=") + 1);
+                    std::erase(name, '\"');
+                } else if (line.find("VERSION_ID=") != std::string::npos) {
+                    version = line.substr(line.find("=") + 1);
+                    std::erase(version, '\"');
                 }
+            }
+
+            return { { name, version } };
+        }
+
+        SemanticVersion getImHexVersion() {
+            #if defined IMHEX_VERSION
+                return SemanticVersion(IMHEX_VERSION);
             #else
-                return "Unknown";
+                return {};
             #endif
         }
 
@@ -741,7 +873,7 @@ namespace hex {
                     return std::string(GIT_COMMIT_HASH_LONG).substr(0, 7);
                 }
             #else
-                hex::unused(longHash);
+                std::ignore = longHash;
                 return "Unknown";
             #endif
         }
@@ -760,6 +892,10 @@ namespace hex {
             #else
                 return false;
             #endif
+        }
+
+        bool isNightlyBuild() {
+            return getImHexVersion().nightly();
         }
 
         bool updateImHex(UpdateType updateType) {
@@ -788,7 +924,7 @@ namespace hex {
 
             EventImHexClosing::subscribe([executablePath, updateTypeString] {
                 hex::executeCommand(
-                        hex::format("{} {}",
+                        hex::format("\"{}\" \"{}\"",
                                     wolv::util::toUTF8String(executablePath),
                                     updateTypeString
                                     )
@@ -857,19 +993,14 @@ namespace hex {
                 return *s_fonts;
             }
 
-            static AutoReset<std::fs::path> s_customFontPath;
-            void setCustomFontPath(const std::fs::path &path) {
-                s_customFontPath = path;
-            }
-
             static float s_fontSize = DefaultFontSize;
             void setFontSize(float size) {
                 s_fontSize = size;
             }
 
-            static AutoReset<std::unique_ptr<ImFontAtlas>> s_fontAtlas;
+            static AutoReset<ImFontAtlas*> s_fontAtlas;
             void setFontAtlas(ImFontAtlas* fontAtlas) {
-                s_fontAtlas = std::unique_ptr<ImFontAtlas>(fontAtlas);
+                s_fontAtlas = fontAtlas;
             }
 
             static ImFont *s_boldFont = nullptr;
@@ -879,6 +1010,10 @@ namespace hex {
                 s_italicFont = italic;
             }
 
+            static AutoReset<std::map<UnlocalizedString, ImFont*>> s_fontDefinitions;
+            std::map<UnlocalizedString, ImFont*>& getFontDefinitions() {
+                return *s_fontDefinitions;
+            }
 
         }
 
@@ -915,7 +1050,7 @@ namespace hex {
             };
         }
 
-        void loadFont(const std::fs::path &path, const std::vector<GlyphRange> &glyphRanges, Offset offset, u32 flags) {
+        void loadFont(const std::fs::path &path, const std::vector<GlyphRange> &glyphRanges, Offset offset, u32 flags, std::optional<u32> defaultSize) {
             wolv::io::File fontFile(path, wolv::io::File::Mode::Read);
             if (!fontFile.isValid()) {
                 log::error("Failed to load font from file '{}'", wolv::util::toUTF8String(path));
@@ -927,22 +1062,20 @@ namespace hex {
                 fontFile.readVector(),
                 glyphRanges,
                 offset,
-                flags
+                flags,
+                defaultSize
             });
         }
 
-        void loadFont(const std::string &name, const std::span<const u8> &data, const std::vector<GlyphRange> &glyphRanges, Offset offset, u32 flags) {
+        void loadFont(const std::string &name, const std::span<const u8> &data, const std::vector<GlyphRange> &glyphRanges, Offset offset, u32 flags, std::optional<u32> defaultSize) {
             impl::s_fonts->emplace_back(Font {
                 name,
                 { data.begin(), data.end() },
                 glyphRanges,
                 offset,
-                flags
+                flags,
+                defaultSize
             });
-        }
-
-        const std::fs::path& getCustomFontPath() {
-            return impl::s_customFontPath;
         }
 
         float getFontSize() {
@@ -950,7 +1083,15 @@ namespace hex {
         }
 
         ImFontAtlas* getFontAtlas() {
-            return impl::s_fontAtlas->get();
+            return impl::s_fontAtlas;
+        }
+
+        void registerFont(const UnlocalizedString &fontName) {
+            (*impl::s_fontDefinitions)[fontName] = nullptr;
+        }
+
+        ImFont* getFont(const UnlocalizedString &fontName) {
+            return (*impl::s_fontDefinitions)[fontName];
         }
 
         ImFont* Bold() {

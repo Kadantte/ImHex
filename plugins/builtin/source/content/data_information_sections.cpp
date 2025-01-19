@@ -4,10 +4,15 @@
 
 #include <imgui.h>
 #include <content/helpers/diagrams.hpp>
+#include <fonts/vscode_icons.hpp>
 #include <hex/api/task_manager.hpp>
 #include <hex/ui/imgui_imhex_extensions.h>
 
+#include <wolv/literals.hpp>
+
 namespace hex::plugin::builtin {
+
+    using namespace wolv::literals;
 
     class InformationProvider : public ContentRegistry::DataInformation::InformationSection {
     public:
@@ -15,7 +20,7 @@ namespace hex::plugin::builtin {
         ~InformationProvider() override = default;
 
         void process(Task &task, prv::Provider *provider, Region region) override {
-            hex::unused(task);
+            std::ignore = task;
 
             m_provider = provider;
             m_region   = region;
@@ -37,13 +42,15 @@ namespace hex::plugin::builtin {
                     ImGui::TableNextColumn();
                     ImGuiExt::TextFormatted("{}", name);
                     ImGui::TableNextColumn();
-                    ImGuiExt::TextFormattedWrapped("{}", value);
+                    ImGui::PushID(name.c_str());
+                    ImGuiExt::TextFormattedWrappedSelectable("{}", value);
+                    ImGui::PopID();
                 }
 
                 ImGui::TableNextColumn();
                 ImGuiExt::TextFormatted("{}", "hex.ui.common.region"_lang);
                 ImGui::TableNextColumn();
-                ImGuiExt::TextFormatted("0x{:X} - 0x{:X}", m_region.getStartAddress(), m_region.getEndAddress());
+                ImGuiExt::TextFormattedSelectable("0x{:X} - 0x{:X}", m_region.getStartAddress(), m_region.getEndAddress());
 
                 ImGui::EndTable();
             }
@@ -64,10 +71,22 @@ namespace hex::plugin::builtin {
 
             task.update();
 
-            m_dataDescription       = magic::getDescription(provider, region.getStartAddress());
-            m_dataMimeType          = magic::getMIMEType(provider, region.getStartAddress());
-            m_dataAppleCreatorType  = magic::getAppleCreatorType(provider, region.getStartAddress());
-            m_dataExtensions        = magic::getExtensions(provider, region.getStartAddress());
+            try {
+                std::vector<u8> data(region.getSize());
+                provider->read(region.getStartAddress(), data.data(), data.size());
+
+                m_dataDescription       = magic::getDescription(data);
+                m_dataMimeType          = magic::getMIMEType(data);
+                m_dataAppleCreatorType  = magic::getAppleCreatorType(data);
+                m_dataExtensions        = magic::getExtensions(data);
+            } catch (const std::bad_alloc &) {
+                hex::log::error("Failed to allocate enough memory for full file magic analysis!");
+
+                // Retry analysis with only the first 100 KiB
+                if (region.getSize() != 100_kiB) {
+                    process(task, provider, { region.getStartAddress(), 100_kiB });
+                }
+            }
         }
 
         void drawContent() override {
@@ -86,7 +105,7 @@ namespace hex::plugin::builtin {
                         if (m_dataDescription == "data") {
                             ImGuiExt::TextFormattedColored(ImVec4(0.92F, 0.25F, 0.2F, 1.0F), "{} ({})", "hex.builtin.information_section.magic.octet_stream_text"_lang, m_dataDescription);
                         } else {
-                            ImGuiExt::TextFormattedWrapped("{}", m_dataDescription);
+                            ImGuiExt::TextFormattedWrappedSelectable("{}", m_dataDescription);
                         }
                     }
 
@@ -99,10 +118,10 @@ namespace hex::plugin::builtin {
                             ImGuiExt::TextFormatted("{}", m_dataMimeType);
                             ImGui::SameLine();
                             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                            ImGuiExt::HelpHover("hex.builtin.information_section.magic.octet_stream_warning"_lang);
+                            ImGuiExt::HelpHover("hex.builtin.information_section.magic.octet_stream_warning"_lang, ICON_VS_INFO);
                             ImGui::PopStyleVar();
                         } else {
-                            ImGuiExt::TextFormatted("{}", m_dataMimeType);
+                            ImGuiExt::TextFormattedSelectable("{}", m_dataMimeType);
                         }
                     }
 
@@ -110,14 +129,14 @@ namespace hex::plugin::builtin {
                         ImGui::TableNextColumn();
                         ImGui::TextUnformatted("hex.builtin.information_section.magic.apple_type"_lang);
                         ImGui::TableNextColumn();
-                        ImGuiExt::TextFormatted("{}", m_dataAppleCreatorType);
+                        ImGuiExt::TextFormattedSelectable("{}", m_dataAppleCreatorType);
                     }
 
                     if (!m_dataExtensions.empty()) {
                         ImGui::TableNextColumn();
                         ImGui::TextUnformatted("hex.builtin.information_section.magic.extension"_lang);
                         ImGui::TableNextColumn();
-                        ImGuiExt::TextFormatted("{}", m_dataExtensions);
+                        ImGuiExt::TextFormattedSelectable("{}", m_dataExtensions);
                     }
 
                     ImGui::EndTable();
@@ -164,6 +183,7 @@ namespace hex::plugin::builtin {
             m_chunkBasedEntropy.reset(m_inputChunkSize, region.getStartAddress(), region.getEndAddress(),
                 provider->getBaseAddress(), provider->getActualSize());
 
+            m_chunkBasedEntropy.enableAnnotations(m_showAnnotations);
             m_byteTypesDistribution.enableAnnotations(m_showAnnotations);
 
             // Create a handle to the file
@@ -195,7 +215,7 @@ namespace hex::plugin::builtin {
         }
 
         void drawSettings() override {
-            ImGuiExt::InputHexadecimal("hex.builtin.information_section.info_analysis.block_size"_lang, &m_inputChunkSize);
+            ImGuiExt::SliderBytes("hex.builtin.information_section.info_analysis.block_size"_lang, &m_inputChunkSize, 0, 1_MiB);
             ImGui::Checkbox("hex.builtin.information_section.info_analysis.show_annotations"_lang, &m_showAnnotations);
         }
 
@@ -239,7 +259,7 @@ namespace hex::plugin::builtin {
                 ImGui::TableNextColumn();
                 ImGuiExt::TextFormatted("{}", "hex.builtin.information_section.info_analysis.block_size"_lang);
                 ImGui::TableNextColumn();
-                ImGuiExt::TextFormatted("hex.builtin.information_section.info_analysis.block_size.desc"_lang, m_chunkBasedEntropy.getSize(), m_chunkBasedEntropy.getChunkSize());
+                ImGuiExt::TextFormattedSelectable("hex.builtin.information_section.info_analysis.block_size.desc"_lang, m_chunkBasedEntropy.getSize(), m_chunkBasedEntropy.getChunkSize());
 
                 ImGui::TableNextColumn();
                 ImGuiExt::TextFormatted("{}", "hex.builtin.information_section.info_analysis.file_entropy"_lang);
@@ -259,7 +279,7 @@ namespace hex::plugin::builtin {
                 ImGui::TableNextColumn();
                 ImGuiExt::TextFormatted("{}", "hex.builtin.information_section.info_analysis.highest_entropy"_lang);
                 ImGui::TableNextColumn();
-                ImGuiExt::TextFormatted("{:.5f} @", m_highestBlockEntropy);
+                ImGuiExt::TextFormattedSelectable("{:.5f} @", m_highestBlockEntropy);
                 ImGui::SameLine();
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -272,7 +292,7 @@ namespace hex::plugin::builtin {
                 ImGui::TableNextColumn();
                 ImGuiExt::TextFormatted("{}", "hex.builtin.information_section.info_analysis.lowest_entropy"_lang);
                 ImGui::TableNextColumn();
-                ImGuiExt::TextFormatted("{:.5f} @", m_lowestBlockEntropy);
+                ImGuiExt::TextFormattedSelectable("{:.5f} @", m_lowestBlockEntropy);
                 ImGui::SameLine();
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -335,7 +355,7 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        u32 m_inputChunkSize = 0;
+        u64 m_inputChunkSize = 0;
 
         u32 m_blockSize = 0;
         double m_averageEntropy = -1.0;
@@ -401,11 +421,31 @@ class InformationByteRelationshipAnalysis : public ContentRegistry::DataInformat
         void drawContent() override {
             auto availableWidth = ImGui::GetContentRegionAvail().x;
 
-            ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.digram"_lang);
-            m_digram.draw({ availableWidth, availableWidth });
+            if (availableWidth > 750_scaled) {
+                availableWidth /= 2;
+                availableWidth -= ImGui::GetStyle().FramePadding.x;
 
-            ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.layered_distribution"_lang);
-            m_layeredDistribution.draw({ availableWidth, availableWidth });
+                if (ImGui::BeginTable("##RelationshipTable", 2)) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+
+                    ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.digram"_lang);
+                    m_digram.draw({ availableWidth, availableWidth });
+
+                    ImGui::TableNextColumn();
+
+                    ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.layered_distribution"_lang);
+                    m_layeredDistribution.draw({ availableWidth, availableWidth });
+
+                    ImGui::EndTable();
+                }
+            } else {
+                ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.digram"_lang);
+                m_digram.draw({ availableWidth, availableWidth });
+
+                ImGui::TextUnformatted("hex.builtin.information_section.relationship_analysis.layered_distribution"_lang);
+                m_layeredDistribution.draw({ availableWidth, availableWidth });
+            }
         }
 
         void load(const nlohmann::json &data) override {

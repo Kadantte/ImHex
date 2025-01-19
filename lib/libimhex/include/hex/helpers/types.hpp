@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include <concepts>
+#include <type_traits>
 
 using u8   = std::uint8_t;
 using u16  = std::uint16_t;
@@ -60,6 +61,10 @@ namespace hex {
 
         constexpr static Region Invalid() {
             return { 0, 0 };
+        }
+
+        constexpr bool operator<(const Region &other) const {
+            return this->address < other.address;
         }
     };
 

@@ -9,10 +9,11 @@
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/debugging.hpp>
 
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <implot.h>
+#include <implot3d.h>
 #include <hex/ui/imgui_imhex_extensions.h>
 
 #include <toasts/toast_notification.hpp>
@@ -54,6 +55,7 @@ namespace hex::plugin::builtin {
         static void drawDebugPopup() {
             static bool showImGuiDemo = false;
             static bool showImPlotDemo = false;
+            static bool showImPlot3DDemo = false;
 
             ImGui::SetNextWindowSize(scaled({ 300, 150 }), ImGuiCond_Always);
             if (ImGui::BeginPopup("DebugMenu")) {
@@ -76,6 +78,7 @@ namespace hex::plugin::builtin {
                             auto ctx = ImGui::GetCurrentContext();
                             ImGui::Checkbox("Show ImGui Demo", &showImGuiDemo);
                             ImGui::Checkbox("Show ImPlot Demo", &showImPlotDemo);
+                            ImGui::Checkbox("Show ImPlot3D Demo", &showImPlot3DDemo);
 
                             if (ImGui::Button("Trigger Breakpoint in Item") || ctx->DebugItemPickerActive)
                                 ImGui::DebugStartItemPicker();
@@ -125,6 +128,8 @@ namespace hex::plugin::builtin {
                 ImGui::ShowDemoWindow(&showImGuiDemo);
             if (showImPlotDemo)
                 ImPlot::ShowDemoWindow(&showImPlotDemo);
+            if (showImPlot3DDemo)
+                ImPlot3D::ShowDemoWindow(&showImPlot3DDemo);
         }
 
     #endif
@@ -253,13 +258,13 @@ namespace hex::plugin::builtin {
                 {
                     ImGuiExt::TextSpinner(hex::format("({})", taskCount).c_str());
                     ImGui::SameLine();
-                    ImGuiExt::SmallProgressBar(progress, (ImGui::GetCurrentWindowRead()->MenuBarHeight() - 10_scaled) / 2.0);
+                    ImGuiExt::SmallProgressBar(progress, (ImGui::GetCurrentWindowRead()->MenuBarHeight - 10_scaled) / 2.0);
                     ImGui::SameLine();
                 }
                 const auto widgetEnd = ImGui::GetCursorPos();
 
                 ImGui::SetCursorPos(widgetStart);
-                ImGui::InvisibleButton("RestTasks", ImVec2(widgetEnd.x - widgetStart.x, ImGui::GetCurrentWindowRead()->MenuBarHeight()));
+                ImGui::InvisibleButton("RestTasks", ImVec2(widgetEnd.x - widgetStart.x, ImGui::GetCurrentWindowRead()->MenuBarHeight));
                 ImGui::SetCursorPos(widgetEnd);
 
                 std::string progressString;
@@ -312,17 +317,46 @@ namespace hex::plugin::builtin {
 
     static void drawProviderContextMenu(prv::Provider *provider) {
         for (const auto &menuEntry : provider->getMenuEntries()) {
-            if (ImGui::MenuItem(menuEntry.name.c_str())) {
+            if (ImGui::MenuItemEx(menuEntry.name.c_str(), menuEntry.icon)) {
                 menuEntry.callback();
             }
         }
     }
 
-    struct MenuItemSorter {
-        bool operator()(const auto *a, const auto *b) const {
-            return a->toolbarIndex < b->toolbarIndex;
+    void drawProviderTooltip(const prv::Provider *provider) {
+        if (ImGuiExt::InfoTooltip()) {
+            ImGui::BeginTooltip();
+
+            ImGuiExt::TextFormatted("{}", provider->getName().c_str());
+
+            const auto &description = provider->getDataDescription();
+            if (!description.empty()) {
+                ImGui::Separator();
+                if (ImGui::GetIO().KeyShift && !description.empty()) {
+
+                    if (ImGui::BeginTable("information", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoKeepColumnsVisible, ImVec2(400_scaled, 0))) {
+                        ImGui::TableSetupColumn("type");
+                        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+
+                        ImGui::TableNextRow();
+
+                        for (auto &[name, value] : description) {
+                            ImGui::TableNextColumn();
+                            ImGuiExt::TextFormatted("{}", name);
+                            ImGui::TableNextColumn();
+                            ImGuiExt::TextFormattedWrapped("{}", value);
+                        }
+
+                        ImGui::EndTable();
+                    }
+                } else {
+                    ImGuiExt::TextFormattedDisabled("hex.builtin.provider.tooltip.show_more"_lang);
+                }
+            }
+
+            ImGui::EndTooltip();
         }
-    };
+    }
 
     void addToolbarItems() {
         ShortcutManager::addGlobalShortcut(AllowWhileTyping + ALT + CTRLCMD + Keys::Left, "hex.builtin.shortcut.prev_provider", []{
@@ -369,17 +403,12 @@ namespace hex::plugin::builtin {
             alwaysShowProviderTabs = value.get<bool>(false);
         });
 
+        // Toolbar items
         ContentRegistry::Interface::addToolbarItem([] {
-            std::set<const ContentRegistry::Interface::impl::MenuItem*, MenuItemSorter> menuItems;
 
-            for (const auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItems()) {
-                if (menuItem.toolbarIndex != -1) {
-                    menuItems.insert(&menuItem);
-                }
-            }
-
-            for (const auto &menuItem : menuItems) {
-                if (menuItem->unlocalizedNames.back().get() == ContentRegistry::Interface::impl::SeparatorValue) {
+            for (const auto &menuItem : ContentRegistry::Interface::impl::getToolbarMenuItems()) {
+                const auto &unlocalizedItemName = menuItem->unlocalizedNames.back();
+                if (unlocalizedItemName.get() == ContentRegistry::Interface::impl::SeparatorValue) {
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
                     continue;
                 }
@@ -388,14 +417,15 @@ namespace hex::plugin::builtin {
                 if (ImGuiExt::ToolBarButton(menuItem->icon.glyph.c_str(), ImGuiExt::GetCustomColorVec4(ImGuiCustomCol(menuItem->icon.color)))) {
                     menuItem->callback();
                 }
+                ImGuiExt::InfoTooltip(Lang(unlocalizedItemName));
+
                 ImGui::EndDisabled();
             }
         });
 
         // Provider switcher
         ContentRegistry::Interface::addToolbarItem([] {
-            const auto provider      = ImHexApi::Provider::get();
-            const bool providerValid = provider != nullptr;
+            const bool providerValid = ImHexApi::Provider::get() != nullptr;
             const bool tasksRunning  = TaskManager::getRunningTaskCount() > 0;
 
             ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
@@ -407,8 +437,10 @@ namespace hex::plugin::builtin {
             {
                 auto providers = ImHexApi::Provider::getProviders();
 
-                ImGui::PushStyleColor(ImGuiCol_TabActive, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
-                ImGui::PushStyleColor(ImGuiCol_TabUnfocusedActive, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+                ImGui::PushStyleColor(ImGuiCol_TabSelected, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+                ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+
+                ImGui::GetCurrentWindow()->WorkRect.Max.x -= 25_scaled;
                 auto providerSelectorVisible = ImGui::BeginTabBar("provider_switcher", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs);
                 ImGui::PopStyleColor(2);
 
@@ -419,6 +451,10 @@ namespace hex::plugin::builtin {
 
                         auto &tabProvider = providers[i];
                         const auto selectedProviderIndex = ImHexApi::Provider::getCurrentProviderIndex();
+
+                        const auto closingProviders = ImHexApi::Provider::impl::getClosingProviders();
+                        if (std::ranges::find(closingProviders, tabProvider) != closingProviders.end())
+                            continue;
 
                         bool open = true;
                         ImGui::PushID(tabProvider);
@@ -444,38 +480,7 @@ namespace hex::plugin::builtin {
                             lastSelectedProvider = i;
                         }
 
-                        if (ImGuiExt::InfoTooltip()) {
-                            ImGui::BeginTooltip();
-
-                            ImGuiExt::TextFormatted("{}", tabProvider->getName().c_str());
-
-                            const auto &description = tabProvider->getDataDescription();
-                            if (!description.empty()) {
-                                ImGui::Separator();
-                                if (ImGui::GetIO().KeyShift && !description.empty()) {
-
-                                    if (ImGui::BeginTable("information", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoKeepColumnsVisible, ImVec2(400_scaled, 0))) {
-                                        ImGui::TableSetupColumn("type");
-                                        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
-
-                                        ImGui::TableNextRow();
-
-                                        for (auto &[name, value] : description) {
-                                            ImGui::TableNextColumn();
-                                            ImGuiExt::TextFormatted("{}", name);
-                                            ImGui::TableNextColumn();
-                                            ImGuiExt::TextFormattedWrapped("{}", value);
-                                        }
-
-                                        ImGui::EndTable();
-                                    }
-                                } else {
-                                    ImGuiExt::TextFormattedDisabled("hex.builtin.provider.tooltip.show_more"_lang);
-                                }
-                            }
-
-                            ImGui::EndTooltip();
-                        }
+                        drawProviderTooltip(tabProvider);
 
                         ImGui::PopID();
 
@@ -484,7 +489,7 @@ namespace hex::plugin::builtin {
                             break;
                         }
 
-                        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right) && ImGui::IsItemHovered()) {
+                        if (ImGui::IsMouseDown(ImGuiMouseButton_Right) && ImGui::IsItemHovered() && !ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
                             rightClickedProvider = tabProvider;
                             RequestOpenPopup::post("ProviderMenu");
                         }
@@ -495,13 +500,15 @@ namespace hex::plugin::builtin {
             ImGui::EndDisabled();
         });
 
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.undo", ImGuiCustomCol_ToolbarBlue);
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.redo", ImGuiCustomCol_ToolbarBlue);
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.file.create_file", ImGuiCustomCol_ToolbarGray);
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.file.open_file", ImGuiCustomCol_ToolbarBrown);
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.view.hex_editor.menu.file.save", ImGuiCustomCol_ToolbarBlue);
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.view.hex_editor.menu.file.save_as", ImGuiCustomCol_ToolbarBlue);
-        ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.bookmark.create", ImGuiCustomCol_ToolbarGreen);
+        EventImHexStartupFinished::subscribe([] {
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.undo", ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.redo", ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.file.create_file", ImGuiCustomCol_ToolbarGray);
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.file.open_file", ImGuiCustomCol_ToolbarBrown);
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.view.hex_editor.menu.file.save", ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.view.hex_editor.menu.file.save_as", ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.bookmark.create", ImGuiCustomCol_ToolbarGreen);
+        });
     }
 
 }

@@ -10,6 +10,7 @@
 #include <hex/ui/view.hpp>
 
 #include <imgui.h>
+#include <content/global_actions.hpp>
 
 #include <content/providers/file_provider.hpp>
 
@@ -42,6 +43,7 @@ namespace hex::plugin::builtin {
                 TaskManager::doLater([provider] { ImHexApi::Provider::remove(provider); });
             } else {
                 EventProviderOpened::post(fileProvider);
+                AchievementManager::unlockAchievement("hex.builtin.achievement.starting_out", "hex.builtin.achievement.starting_out.open_file.name");
             }
         }
     }
@@ -79,24 +81,37 @@ namespace hex::plugin::builtin {
             if (provider->isDirty()) {
                 *shouldClose = false;
                 PopupUnsavedChanges::open("hex.builtin.popup.close_provider.desc"_lang,
-                                    []{
-                                        for (const auto &provider : ImHexApi::Provider::impl::getClosingProviders())
-                                            ImHexApi::Provider::remove(provider, true);
+                    []{
+                        const bool projectSaved = ProjectFile::hasPath() ? saveProject() : saveProjectAs();
+                        if (projectSaved) {
+                            for (const auto &provider : ImHexApi::Provider::impl::getClosingProviders())
+                                ImHexApi::Provider::remove(provider, true);
 
-                                        if (imhexClosing)
-                                            ImHexApi::System::closeImHex(true);
-                                    },
-                                    [] {
-                                        ImHexApi::Provider::impl::resetClosingProvider();
-                                        imhexClosing = false;
-                                    }
+                            if (imhexClosing)
+                                ImHexApi::System::closeImHex(true);
+                        } else {
+                            ImHexApi::Provider::impl::resetClosingProvider();
+                            imhexClosing = false;
+                        }
+                    },
+                    [] {
+                        for (const auto &provider : ImHexApi::Provider::impl::getClosingProviders())
+                            ImHexApi::Provider::remove(provider, true);
+
+                        if (imhexClosing)
+                            ImHexApi::System::closeImHex(true);
+                    },
+                    [] {
+                        ImHexApi::Provider::impl::resetClosingProvider();
+                        imhexClosing = false;
+                    }
                 );
             }
         });
 
         EventProviderChanged::subscribe([](hex::prv::Provider *oldProvider, hex::prv::Provider *newProvider) {
-            hex::unused(oldProvider);
-            hex::unused(newProvider);
+            std::ignore = oldProvider;
+            std::ignore = newProvider;
 
             RequestUpdateWindowTitle::post();
         });
@@ -210,12 +225,16 @@ namespace hex::plugin::builtin {
                  RequestOpenFile::post(path);
         });
 
-        EventWindowInitialized::subscribe([] {
-            if (ContentRegistry::Settings::read<std::string>("hex.builtin.setting.general", "hex.builtin.setting.general.prev_launch_version", "") == "") {
+        RequestStartMigration::subscribe([] {
+            const auto currVersion = ImHexApi::System::getImHexVersion();
+            const auto prevLaunchVersion = ContentRegistry::Settings::read<std::string>("hex.builtin.setting.general", "hex.builtin.setting.general.prev_launch_version", "");
+            if (prevLaunchVersion == "") {
                 EventFirstLaunch::post();
             }
 
-            ContentRegistry::Settings::write<std::string>("hex.builtin.setting.general", "hex.builtin.setting.general.prev_launch_version", ImHexApi::System::getImHexVersion());
+            EventImHexUpdated::post(SemanticVersion(prevLaunchVersion), currVersion);
+
+            ContentRegistry::Settings::write<std::string>("hex.builtin.setting.general", "hex.builtin.setting.general.prev_launch_version", currVersion.get(false));
         });
 
         EventWindowDeinitializing::subscribe([](GLFWwindow *window) {

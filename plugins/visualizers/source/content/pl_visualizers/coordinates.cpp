@@ -13,14 +13,14 @@
 
 namespace hex::plugin::visualizers {
 
-    void drawCoordinateVisualizer(pl::ptrn::Pattern &, pl::ptrn::IIterable &, bool shouldReset, std::span<const pl::core::Token::Literal> arguments) {
+    void drawCoordinateVisualizer(pl::ptrn::Pattern &, bool shouldReset, std::span<const pl::core::Token::Literal> arguments) {
         static ImVec2 coordinate;
         static double latitude, longitude;
         static std::string address;
         static std::mutex addressMutex;
         static TaskHolder addressTask;
 
-        static auto mapTexture = ImGuiExt::Texture(romfs::get("assets/common/map.jpg").span(), ImGuiExt::Texture::Filter::Linear);
+        static auto mapTexture = ImGuiExt::Texture::fromImage(romfs::get("assets/common/map.jpg").span(), ImGuiExt::Texture::Filter::Linear);
         static ImVec2 mapSize = scaled(ImVec2(500, 500 / mapTexture.getAspectRatio()));
 
         if (shouldReset) {

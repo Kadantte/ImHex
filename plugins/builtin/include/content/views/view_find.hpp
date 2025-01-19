@@ -11,6 +11,8 @@
 
 #include <wolv/container/interval_tree.hpp>
 
+#include <hex/api/content_registry.hpp>
+
 namespace hex::plugin::builtin {
 
     class ViewFind : public View::Window {
@@ -22,12 +24,7 @@ namespace hex::plugin::builtin {
 
     private:
 
-        struct Occurrence {
-            Region region;
-            enum class DecodeType { ASCII, Binary, UTF16, Unsigned, Signed, Float, Double } decodeType;
-            std::endian endian = std::endian::native;
-            bool selected;
-        };
+        using Occurrence = hex::ContentRegistry::DataFormatter::impl::FindOccurrence;
 
         struct BinaryPattern {
             u8 mask, value;
@@ -45,7 +42,7 @@ namespace hex::plugin::builtin {
                 Value
             } mode = Mode::Strings;
 
-            enum class StringType : int { ASCII = 0, UTF16LE = 1, UTF16BE = 2, ASCII_UTF16LE = 3, ASCII_UTF16BE = 4 };
+            enum class StringType : int { ASCII = 0, UTF8 = 1, UTF16LE = 2, UTF16BE = 3, ASCII_UTF16LE = 4, ASCII_UTF16BE = 5 };
 
             struct Strings {
                 int minLength = 5;
@@ -101,6 +98,7 @@ namespace hex::plugin::builtin {
         using OccurrenceTree = wolv::container::IntervalTree<Occurrence>;
 
         PerProvider<std::vector<Occurrence>> m_foundOccurrences, m_sortedOccurrences;
+        PerProvider<Occurrence*> m_lastSelectedOccurrence;
         PerProvider<OccurrenceTree> m_occurrenceTree;
         PerProvider<std::string> m_currFilter;
 

@@ -1,4 +1,4 @@
-# This image is is provided for reference, but a (probably more up to date) image should be available at https://github.com/iTrooz/macos-crosscompile
+# This image is provided for reference, but a (probably more up to date) image should be available at https://github.com/iTrooz/macos-crosscompile
 FROM ubuntu:22.04
 
 ENV PATH                $PATH:/osxcross/target/bin
@@ -68,19 +68,6 @@ RUN --mount=type=cache,target=/cache <<EOF
     
     ccache -s
 EOF
-# Not needed, because we don't use gcc for cross-compiling anymore
-# ## Install dependencies for gcc-13
-# RUN apt install -y gcc g++ zlib1g-dev libmpc-dev libmpfr-dev libgmp-dev
-# ## Build cross-compiler gcc-13
-# RUN --mount=type=cache,target=/cache <<EOF
-#     set -xe
-#     ccache -zs
-
-#     cd /osxcross
-#     UNATTENDED=1 CC=/usr/lib/ccache/gcc CXX=/usr/lib/ccache/g++ GCC_VERSION=13.2.0 ./build_gcc.sh
-
-#     ccache -s
-# EOF
 
 ARG DELETE_SDK=1
 RUN <<EOF

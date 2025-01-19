@@ -16,7 +16,7 @@
 #include <filesystem>
 
 #include <imgui.h>
-#include <fonts/codicons_font.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -28,7 +28,9 @@
 #elif defined(OS_LINUX)
     #include <fcntl.h>
     #include <unistd.h>
-    #include <linux/fs.h>
+    #if !defined(OS_FREEBSD)
+        #include <linux/fs.h>
+    #endif
     #include <sys/stat.h>
     #include <sys/ioctl.h>
     #include <sys/types.h>
@@ -41,8 +43,11 @@
     #include <sys/disk.h>
 #endif
 
-#if defined(OS_LINUX)
-#define lseek lseek64
+#if defined(OS_LINUX) && !defined(OS_FREEBSD)
+    #define lseek lseek64
+#elif defined(OS_FREEBSD)
+    #include <sys/disk.h>
+    #define DEFAULT_SECTOR_SIZE 512
 #endif
 
 namespace hex::plugin::builtin {
@@ -83,6 +88,12 @@ namespace hex::plugin::builtin {
                 return -1;
             return 0;
         }
+    #elif defined(OS_FREEBSD) && defined(DIOCGSECTORSIZE)
+        int blkdev_get_sector_size(int fd, int *sector_size) {
+            if (ioctl(fd, DIOCGSECTORSIZE, sector_size) < 0)
+                return -1;
+            return 0;
+        }
     #else
         int blkdev_get_sector_size(int fd, int *sector_size) {
             (void)fd;
@@ -94,6 +105,12 @@ namespace hex::plugin::builtin {
     #ifdef BLKGETSIZE64
         int blkdev_get_size(int fd, u64 *bytes) {
             if (ioctl(fd, BLKGETSIZE64, bytes) < 0)
+                return -1;
+            return 0;
+        }
+    #elif defined(OS_FREEBSD) && defined(DIOCGMEDIASIZE)
+        int blkdev_get_size(int fd, u64 *bytes) {
+            if (ioctl(fd, DIOCGMEDIASIZE, bytes) < 0)
                 return -1;
             return 0;
         }
@@ -190,14 +207,14 @@ namespace hex::plugin::builtin {
 
             m_diskHandle = ::open(path.c_str(), O_RDWR);
             if (m_diskHandle == -1) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_rw"_lang, path, ::strerror(errno)));
+                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_rw"_lang, path, std::system_category().message(errno)));
                 log::warn(this->getErrorMessage());
                 m_diskHandle = ::open(path.c_str(), O_RDONLY);
                 m_writable   = false;
             }
 
             if (m_diskHandle == -1) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_ro"_lang, path, ::strerror(errno)));
+                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_ro"_lang, path, std::system_category().message(errno)));
                 log::warn(this->getErrorMessage());
                 m_readable = false;
                 return false;
@@ -352,9 +369,9 @@ namespace hex::plugin::builtin {
 
     std::vector<DiskProvider::Description> DiskProvider::getDataDescription() const {
         return {
-                { "hex.builtin.provider.disk.selected_disk"_lang, wolv::util::toUTF8String(m_path) },
-                { "hex.builtin.provider.disk.disk_size"_lang,     hex::toByteString(m_diskSize)    },
-                { "hex.builtin.provider.disk.sector_size"_lang,   hex::toByteString(m_sectorSize)  }
+            { "hex.builtin.provider.disk.selected_disk"_lang, wolv::util::toUTF8String(m_path) },
+            { "hex.builtin.provider.disk.disk_size"_lang,     hex::toByteString(m_diskSize)    },
+            { "hex.builtin.provider.disk.sector_size"_lang,   hex::toByteString(m_sectorSize)  }
         };
     }
 
@@ -364,8 +381,8 @@ namespace hex::plugin::builtin {
 
         m_availableDrives.clear();
 
-        std::array<TCHAR, MAX_DEVICE_ID_LEN> deviceInstanceID = {};
-        std::array<TCHAR, 1024> description = {};
+        std::array<WCHAR, MAX_DEVICE_ID_LEN> deviceInstanceId = {};
+        std::array<WCHAR, 1024> description = {};
 
         const GUID hddClass = GUID_DEVINTERFACE_DISK;
 
@@ -387,7 +404,7 @@ namespace hex::plugin::builtin {
             if (!SetupDiEnumInterfaceDevice(hDevInfo, nullptr, &hddClass, i, &interfaceData))
                 break;
 
-            if (CM_Get_Device_ID(deviceInfoData.DevInst, deviceInstanceID.data(), MAX_PATH, 0) != CR_SUCCESS)
+            if (CM_Get_Device_IDW(deviceInfoData.DevInst, deviceInstanceId.data(), MAX_PATH, 0) != CR_SUCCESS)
                 continue;
 
             // Get the required size of the device path
@@ -402,19 +419,19 @@ namespace hex::plugin::builtin {
             if (!SetupDiGetDeviceInterfaceDetail(hDevInfo, &interfaceData, data, requiredSize, nullptr, nullptr))
                 continue;
 
-            auto path = data->DevicePath;
+            auto path = reinterpret_cast<const WCHAR*>(data->DevicePath);
 
             // Query the friendly name of the device
             DWORD size = 0;
             DWORD propertyRegDataType = SPDRP_PHYSICAL_DEVICE_OBJECT_NAME;
-            SetupDiGetDeviceRegistryProperty(hDevInfo, &deviceInfoData, SPDRP_FRIENDLYNAME,
+            SetupDiGetDeviceRegistryPropertyW(hDevInfo, &deviceInfoData, SPDRP_FRIENDLYNAME,
                                              &propertyRegDataType, reinterpret_cast<BYTE*>(description.data()),
                                              sizeof(description),
                                              &size);
 
             auto friendlyName = description.data();
 
-            m_availableDrives.insert({ path, friendlyName });
+            m_availableDrives.insert({ utf16ToUtf8(path), utf16ToUtf8(friendlyName) });
         }
 
         // Add all logical drives
@@ -480,7 +497,7 @@ namespace hex::plugin::builtin {
     }
 
     nlohmann::json DiskProvider::storeSettings(nlohmann::json settings) const {
-        settings["path"] = wolv::util::toUTF8String(m_path);
+        settings["path"] = wolv::io::fs::toNormalizedPathString(m_path);
 
         settings["friendly_name"] = m_friendlyName;
 
@@ -510,7 +527,7 @@ namespace hex::plugin::builtin {
 
     std::variant<std::string, i128> DiskProvider::queryInformation(const std::string &category, const std::string &argument) {
         if (category == "file_path")
-            return wolv::util::toUTF8String(m_path);
+            return wolv::io::fs::toNormalizedPathString(m_path);
         else if (category == "sector_size")
             return m_sectorSize;
         else if (category == "friendly_name")

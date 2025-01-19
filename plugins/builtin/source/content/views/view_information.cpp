@@ -18,6 +18,7 @@ namespace hex::plugin::builtin {
         m_analysisData.setOnCreateCallback([](const prv::Provider *provider, AnalysisData &data) {
             data.analyzedProvider = provider;
 
+            data.informationSections.clear();
             for (const auto &informationSectionConstructor : ContentRegistry::DataInformation::impl::getInformationSectionConstructors()) {
                 data.informationSections.push_back(informationSectionConstructor());
             }
@@ -102,8 +103,7 @@ namespace hex::plugin::builtin {
 
                 // Draw settings window
                 ImGui::BeginDisabled(analysis.task.isRunning());
-                ImGuiExt::BeginSubWindow("hex.ui.common.settings"_lang);
-                {
+                if (ImGuiExt::BeginSubWindow("hex.ui.common.settings"_lang)) {
                     // Create a table so we can draw global settings on the left and section specific settings on the right
                     if (ImGui::BeginTable("SettingsTable", 2, ImGuiTableFlags_BordersInner | ImGuiTableFlags_SizingStretchProp, ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
                         ImGui::TableSetupColumn("Left", ImGuiTableColumnFlags_WidthStretch, 0.3F);
@@ -147,6 +147,7 @@ namespace hex::plugin::builtin {
                     ImGui::SetCursorPosX(50_scaled);
                     if (ImGuiExt::DimmedButton("hex.builtin.view.information.analyze"_lang, ImVec2(ImGui::GetContentRegionAvail().x - 50_scaled, 0)))
                         this->analyze();
+
                 }
                 ImGuiExt::EndSubWindow();
                 ImGui::EndDisabled();
@@ -159,7 +160,7 @@ namespace hex::plugin::builtin {
                         bool enabled = section->isEnabled();
 
                         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0F);
-                        if (ImGui::BeginChild(Lang(section->getUnlocalizedName()), ImVec2(0, 0), ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_MenuBar)) {
+                        if (ImGui::BeginChild(Lang(section->getUnlocalizedName()), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_MenuBar)) {
                             if (ImGui::BeginMenuBar()) {
 
                                 // Draw the enable checkbox of the section
@@ -186,7 +187,7 @@ namespace hex::plugin::builtin {
                                     ImGui::SameLine();
                                     if (auto description = section->getUnlocalizedDescription(); !description.empty()) {
                                         ImGui::SameLine();
-                                        ImGuiExt::HelpHover(Lang(description));
+                                        ImGuiExt::HelpHover(Lang(description), ICON_VS_INFO);
                                     }
 
                                     // Draw settings gear on the right

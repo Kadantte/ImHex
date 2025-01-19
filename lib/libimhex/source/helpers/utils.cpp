@@ -8,6 +8,9 @@
 #include <hex/providers/buffered_reader.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
+
+#include <GLFW/glfw3.h>
 
 #if defined(OS_WINDOWS)
     #include <windows.h>
@@ -16,9 +19,11 @@
     #include <wolv/utils/guards.hpp>
 #elif defined(OS_LINUX)
     #include <unistd.h>
+    #include <dlfcn.h>
     #include <hex/helpers/utils_linux.hpp>
 #elif defined(OS_MACOS)
     #include <unistd.h>
+    #include <dlfcn.h>
     #include <hex/helpers/utils_macos.hpp>
 #elif defined(OS_WEB)
     #include "emscripten.h"
@@ -334,13 +339,13 @@ namespace hex {
     void startProgram(const std::string &command) {
 
         #if defined(OS_WINDOWS)
-            hex::unused(system(hex::format("start {0}", command).c_str()));
+            std::ignore = system(hex::format("start {0}", command).c_str());
         #elif defined(OS_MACOS)
-            hex::unused(system(hex::format("open {0}", command).c_str()));
+            std::ignore = system(hex::format("open {0}", command).c_str());
         #elif defined(OS_LINUX)
             executeCmd({"xdg-open", command});
         #elif defined(OS_WEB)
-            hex::unused(command);
+            std::ignore = command;
         #endif
     }
 
@@ -353,7 +358,7 @@ namespace hex {
             url = "https://" + url;
 
         #if defined(OS_WINDOWS)
-            ShellExecute(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         #elif defined(OS_MACOS)
             openWebpageMacos(url.c_str());
         #elif defined(OS_LINUX)
@@ -677,6 +682,44 @@ namespace hex {
             return value;
     }
 
+    [[nodiscard]] std::string limitStringLength(const std::string &string, size_t maxLength) {
+        // If the string is shorter than the max length, return it as is
+        if (string.size() < maxLength)
+            return string;
+
+        // If the string is longer than the max length, find the last space before the max length
+        auto it = string.begin() + maxLength / 2;
+        while (it != string.begin() && !std::isspace(*it)) --it;
+
+        // If there's no space before the max length, just cut the string
+        if (it == string.begin()) {
+            it = string.begin() + maxLength / 2;
+
+            // Try to find a UTF-8 character boundary
+            while (it != string.begin() && (*it & 0xC0) == 0x80) --it;
+        }
+
+        // If we still didn't find a valid boundary, just return the string as is
+        if (it == string.begin())
+            return string;
+
+        auto result = std::string(string.begin(), it) + "…";
+
+        // If the string is longer than the max length, find the last space before the max length
+        it = string.end() - 1 - maxLength / 2;
+        while (it != string.end() && !std::isspace(*it)) ++it;
+
+        // If there's no space before the max length, just cut the string
+        if (it == string.end()) {
+            it = string.end() - 1 - maxLength / 2;
+
+            // Try to find a UTF-8 character boundary
+            while (it != string.end() && (*it & 0xC0) == 0x80) ++it;
+        }
+
+        return result + std::string(it, string.end());
+    }
+
     static std::optional<std::fs::path> s_fileToOpen;
     extern "C" void openFile(const char *path) {
         log::info("Opening file: {0}", path);
@@ -782,6 +825,44 @@ namespace hex {
         #else
             return std::system_category().message(error);
         #endif
+    }
+
+
+    void* getContainingModule(void* symbol) {
+        #if defined(OS_WINDOWS)
+            MEMORY_BASIC_INFORMATION mbi;
+            if (VirtualQuery(symbol, &mbi, sizeof(mbi)))
+                return mbi.AllocationBase;
+
+            return nullptr;
+        #elif !defined(OS_WEB)
+            Dl_info info = {};
+            if (dladdr(symbol, &info) == 0)
+                return nullptr;
+
+            return dlopen(info.dli_fname, RTLD_LAZY);
+        #else
+            std::ignore = symbol;
+            return nullptr;
+        #endif
+    }
+
+    std::optional<ImColor> blendColors(const std::optional<ImColor> &a, const std::optional<ImColor> &b) {
+        if (!a.has_value() && !b.has_value())
+            return std::nullopt;
+        else if (a.has_value() && !b.has_value())
+            return a;
+        else if (!a.has_value() && b.has_value())
+            return b;
+        else
+            return ImAlphaBlendColors(a.value(), b.value());
+    }
+
+    extern "C" void macOSCloseButtonPressed() {
+        auto windowHandle = ImHexApi::System::getMainWindowHandle();
+
+        glfwHideWindow(windowHandle);
+        glfwIconifyWindow(windowHandle);
     }
 
 }

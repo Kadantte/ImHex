@@ -24,12 +24,7 @@ namespace hex::plugin::builtin {
 
         class IEEE754STATICS {
         public:
-            IEEE754STATICS() {
-                value = 0;
-                exponentBitCount = 8;
-                mantissaBitCount = 23;
-                resultFloat = 0;
-            }
+            IEEE754STATICS() : value(0), exponentBitCount(8), mantissaBitCount(23), resultFloat(0) {}
 
             u128 value;
             i32 exponentBitCount;
@@ -482,7 +477,7 @@ namespace hex::plugin::builtin {
 
             ImGui::TableNextColumn();
 
-            ImGui::Text("=");
+            ImGui::TextUnformatted("=");
 
             // Sign.
             ImGui::TableNextColumn();
@@ -496,14 +491,14 @@ namespace hex::plugin::builtin {
             ImGui::Indent(10_scaled);
             ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, signColorU32);
             if (ieee754.signBits == 1)
-                ImGui::Text("-1");
+                ImGui::TextUnformatted("-1");
             else
-                ImGui::Text("+1");
+                ImGui::TextUnformatted("+1");
             ImGui::Unindent(10_scaled);
 
             // Times.
             ImGui::TableNextColumn();
-            ImGui::Text("x");
+            ImGui::TextUnformatted("x");
             ImGui::TableNextColumn();
 
             // Exponent.
@@ -512,13 +507,13 @@ namespace hex::plugin::builtin {
             ImGui::Indent(20_scaled);
             if (ieee754.numberType == NumberType::NaN) {
                 if (ieee754.valueType == ValueType::QuietNaN)
-                    ImGui::Text("qNaN");
+                    ImGui::TextUnformatted("qNaN");
                 else
-                    ImGui::Text("sNaN");
+                    ImGui::TextUnformatted("sNaN");
             } else if (ieee754.numberType == NumberType::Infinity) {
-                ImGui::Text("Inf");
+                ImGui::TextUnformatted("Inf");
             } else if (ieee754.numberType == NumberType::Zero) {
-                ImGui::Text("0");
+                ImGui::TextUnformatted("0");
             } else if (ieee754.numberType == NumberType::Denormal) {
                 ImGuiExt::TextFormatted("2^{0}", 1 - ieee754.exponentBias);
             } else {
@@ -529,7 +524,7 @@ namespace hex::plugin::builtin {
 
             // Times.
             ImGui::TableNextColumn();
-            ImGui::Text("x");
+            ImGui::TextUnformatted("x");
             ImGui::TableNextColumn();
 
             // Mantissa.
@@ -567,6 +562,19 @@ namespace hex::plugin::builtin {
             auto color = ImGui::GetColorU32(ImGuiCol_ButtonActive);
 
             bool needsPop = false;
+            if (ieee754statics.exponentBitCount == 3 && ieee754statics.mantissaBitCount == 4) {
+                ImGui::PushStyleColor(ImGuiCol_Button, color);
+                needsPop = true;
+            }
+            if (ImGui::Button("hex.builtin.tools.ieee754.quarter_precision"_lang)) {
+                ieee754statics.exponentBitCount = 3;
+                ieee754statics.mantissaBitCount = 4;
+                inputFieldWidth = 0;
+            }
+            if (needsPop) ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+            needsPop = false;
             if (ieee754statics.exponentBitCount == 5 && ieee754statics.mantissaBitCount == 10) {
                 ImGui::PushStyleColor(ImGuiCol_Button, color);
                 needsPop = true;
@@ -652,7 +660,7 @@ namespace hex::plugin::builtin {
 
             // Equals.
             ImGui::TableNextColumn();
-            ImGui::Text("=");
+            ImGui::TextUnformatted("=");
 
             FormatBits(signBitPosition, exponentBitPosition, mantissaBitPosition);
 

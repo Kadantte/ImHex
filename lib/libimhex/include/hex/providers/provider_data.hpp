@@ -74,8 +74,12 @@ namespace hex {
             return m_data | std::views::values;
         }
 
-        void setOnCreateCallback(std::function<void(const prv::Provider *, T&)> callback) {
+        void setOnCreateCallback(std::function<void(prv::Provider *, T&)> callback) {
             m_onCreateCallback = std::move(callback);
+        }
+
+        void setOnDestroyCallback(std::function<void(prv::Provider *, T&)> callback) {
+            m_onDestroyCallback = std::move(callback);
         }
 
     private:
@@ -84,11 +88,16 @@ namespace hex {
                 auto [it, inserted] = m_data.emplace(provider, T());
                 auto &[key, value] = *it;
                 if (m_onCreateCallback)
-                    m_onCreateCallback(key, value);
+                    m_onCreateCallback(provider, value);
             });
 
             EventProviderDeleted::subscribe(this, [this](prv::Provider *provider){
-                m_data.erase(provider);
+                if (auto it = m_data.find(provider); it != m_data.end()) {
+                    if (m_onDestroyCallback)
+                        m_onDestroyCallback(provider, m_data.at(provider));
+
+                    m_data.erase(it);
+                }
             });
 
             EventImHexClosing::subscribe(this, [this] {
@@ -113,6 +122,7 @@ namespace hex {
         }
 
         void onDestroy() {
+
             EventProviderOpened::unsubscribe(this);
             EventProviderDeleted::unsubscribe(this);
             EventImHexClosing::unsubscribe(this);
@@ -121,7 +131,7 @@ namespace hex {
 
     private:
         std::map<const prv::Provider *, T> m_data;
-        std::function<void(const prv::Provider *, T&)> m_onCreateCallback;
+        std::function<void(prv::Provider *, T&)> m_onCreateCallback, m_onDestroyCallback;
     };
 
 }

@@ -1,11 +1,16 @@
+#include <hex/api/content_registry.hpp>
+#include <hex/api/theme_manager.hpp>
+
 #include "window.hpp"
 
-#include "messaging.hpp"
 
 #if defined(OS_WINDOWS)
 
+    #include "messaging.hpp"
+
     #include <hex/helpers/utils.hpp>
     #include <hex/helpers/logger.hpp>
+    #include <hex/helpers/default_paths.hpp>
 
     #include <imgui.h>
     #include <imgui_internal.h>
@@ -22,8 +27,7 @@
     #include <wrl/client.h>
     #include <fcntl.h>
     #include <shellapi.h>
-
-    #include <cstdio>
+    #include <timeapi.h>
 
 namespace hex {
 
@@ -33,15 +37,32 @@ namespace hex {
     static LONG_PTR s_oldWndProc;
     static float s_titleBarHeight;
     static Microsoft::WRL::ComPtr<ITaskbarList4> s_taskbarList;
+    static bool s_useLayeredWindow = true;
 
     void nativeErrorMessage(const std::string &message) {
         log::fatal(message);
-        MessageBox(nullptr, message.c_str(), "Error", MB_ICONERROR | MB_OK);
+        MessageBoxA(nullptr, message.c_str(), "Error", MB_ICONERROR | MB_OK);
     }
 
     // Custom Window procedure for receiving OS events
     static LRESULT commonWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         switch (uMsg) {
+            case WM_DPICHANGED: {
+                int interfaceScaleSetting = int(hex::ContentRegistry::Settings::read<float>("hex.builtin.setting.interface", "hex.builtin.setting.interface.scaling_factor", 0.0F) * 10.0F);
+                if (interfaceScaleSetting != 0)
+                    break;
+
+                const auto newScale = LOWORD(wParam) / 96.0F;
+                const auto oldScale = ImHexApi::System::getNativeScale();
+
+                EventDPIChanged::post(oldScale, newScale);
+                ImHexApi::System::impl::setNativeScale(newScale);
+
+                ThemeManager::reapplyCurrentTheme();
+                ImGui::GetStyle().ScaleAllSizes(newScale);
+
+                return TRUE;
+            }
             case WM_COPYDATA: {
                 // Handle opening files in existing instance
 
@@ -76,7 +97,7 @@ namespace hex {
                 // Handle Windows theme changes
                 if (lParam == 0) break;
 
-                if (LPCTSTR(lParam) == std::string_view("ImmersiveColorSet")) {
+                if (reinterpret_cast<const WCHAR*>(lParam) == std::wstring_view(L"ImmersiveColorSet")) {
                     EventOSThemeChanged::post();
                 }
 
@@ -84,7 +105,7 @@ namespace hex {
             }
             case WM_SETCURSOR: {
                 if (LOWORD(lParam) != HTCLIENT) {
-                    return CallWindowProc((WNDPROC)s_oldWndProc, hwnd, uMsg, wParam, lParam);
+                    return CallWindowProc(reinterpret_cast<WNDPROC>(s_oldWndProc), hwnd, uMsg, wParam, lParam);
                 } else {
                     switch (ImGui::GetMouseCursor()) {
                         case ImGuiMouseCursor_Arrow:
@@ -114,6 +135,8 @@ namespace hex {
                         case ImGuiMouseCursor_TextInput:
                             SetCursor(LoadCursor(nullptr, IDC_IBEAM));
                             break;
+                        default:
+                            break;
                     }
 
                     return TRUE;
@@ -123,7 +146,7 @@ namespace hex {
                 break;
         }
 
-        return CallWindowProc((WNDPROC)s_oldWndProc, hwnd, uMsg, wParam, lParam);
+        return CallWindowProc(reinterpret_cast<WNDPROC>(s_oldWndProc), hwnd, uMsg, wParam, lParam);
     }
 
     // Custom window procedure for borderless window
@@ -141,7 +164,7 @@ namespace hex {
                 RECT &rect  = *reinterpret_cast<RECT *>(lParam);
                 RECT client = rect;
 
-                CallWindowProc((WNDPROC)s_oldWndProc, hwnd, uMsg, wParam, lParam);
+                CallWindowProc(reinterpret_cast<WNDPROC>(s_oldWndProc), hwnd, uMsg, wParam, lParam);
 
                 if (IsMaximized(hwnd)) {
                     WINDOWINFO windowInfo = { };
@@ -158,7 +181,51 @@ namespace hex {
                     rect = client;
                 }
 
-                return 0;
+                // This code tries to avoid DWM flickering when resizing the window
+                // It's not perfect, but it's really the best we can do.
+
+                LARGE_INTEGER performanceFrequency = {};
+                QueryPerformanceFrequency(&performanceFrequency);
+                TIMECAPS tc = {};
+                timeGetDevCaps(&tc, sizeof(tc));
+
+                const auto granularity = tc.wPeriodMin;
+                timeBeginPeriod(tc.wPeriodMin);
+
+                DWM_TIMING_INFO dti = {};
+                dti.cbSize = sizeof(dti);
+                ::DwmGetCompositionTimingInfo(nullptr, &dti);
+
+                LARGE_INTEGER end = {};
+                QueryPerformanceCounter(&end);
+
+                const auto period = dti.qpcRefreshPeriod;
+                const i64 delta = dti.qpcVBlank - end.QuadPart;
+
+                i64 sleepTicks = 0;
+                i64 sleepMilliSeconds = 0;
+                if (delta >= 0) {
+                    sleepTicks = delta / period;
+                } else {
+                    sleepTicks = -1 + delta / period;
+                }
+
+                sleepMilliSeconds = delta - (period * sleepTicks);
+                const double sleepTime = std::round(1000.0 * double(sleepMilliSeconds) / double(performanceFrequency.QuadPart));
+                if (sleepTime >= 0.0) {
+                    Sleep(DWORD(sleepTime));
+                }
+                timeEndPeriod(granularity);
+
+                return WVR_REDRAW;
+            }
+            case WM_ERASEBKGND:
+                return 1;
+            case WM_WINDOWPOSCHANGING: {
+                // Make sure that windows discards the entire client area when resizing to avoid flickering
+                const auto windowPos = reinterpret_cast<LPWINDOWPOS>(lParam);
+                windowPos->flags |= SWP_NOCOPYBITS;
+                break;
             }
             case WM_NCHITTEST: {
                 // Handle window resizing and moving
@@ -191,8 +258,15 @@ namespace hex {
                     RegionTop * (cursor.y < (window.top + border.y)) |
                     RegionBottom * (cursor.y >= (window.bottom - border.y));
 
-                if (result != 0 && (ImGui::IsAnyItemHovered() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))) {
+                if (result != 0 && (ImGui::IsAnyItemHovered())) {
                     break;
+                }
+
+                if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+                    if (result == RegionClient)
+                        return HTCLIENT;
+                    else
+                        return HTCAPTION;
                 }
 
                 std::string_view hoveredWindowName = GImGui->HoveredWindow == nullptr ? "" : GImGui->HoveredWindow->Name;
@@ -308,6 +382,21 @@ namespace hex {
         }
     }
 
+    void Window::configureGLFW() {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+        glfwWindowHint(GLFW_DECORATED, ImHexApi::System::isBorderlessWindowModeEnabled() ? GL_FALSE : GL_TRUE);
+
+        // Windows versions before Windows 10 have issues with transparent framebuffers
+        // causing the entire window to be slightly transparent ignoring all configurations
+        OSVERSIONINFOA versionInfo = { };
+        if (::GetVersionExA(&versionInfo) && versionInfo.dwMajorVersion >= 10) {
+            glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+        } else {
+            glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_FALSE);
+        }
+    }
+
 
     void Window::initNative() {
         if (ImHexApi::System::isDebugBuild()) {
@@ -324,12 +413,6 @@ namespace hex {
             reopenConsoleHandle(STD_INPUT_HANDLE,  STDIN_FILENO,  stdin);
             reopenConsoleHandle(STD_OUTPUT_HANDLE, STDOUT_FILENO, stdout);
 
-            // Explicitly don't forward stderr because some libraries like to write to it
-            // with no way to disable it (e.g., libmagic)
-            /*
-                reopenConsoleHandle(STD_ERROR_HANDLE,  STDERR_FILENO, stderr);
-            */
-
             // Enable ANSI colors in the console
             log::impl::enableColorPrinting();
         } else {
@@ -337,7 +420,7 @@ namespace hex {
         }
 
         // Add plugin library folders to dll search path
-        for (const auto &path : hex::fs::getDefaultPaths(fs::ImHexPath::Libraries))  {
+        for (const auto &path : paths::Libraries.read())  {
             if (std::fs::exists(path))
                 AddDllDirectory(path.c_str());
         }
@@ -445,7 +528,7 @@ namespace hex {
 
         // Set up the correct window procedure based on the borderless window mode state
         if (borderlessWindowMode) {
-            s_oldWndProc = ::SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)borderlessWindowProc);
+            s_oldWndProc = ::SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(borderlessWindowProc));
 
             MARGINS borderless = { 1, 1, 1, 1 };
             ::DwmExtendFrameIntoClientArea(hwnd, &borderless);
@@ -455,7 +538,7 @@ namespace hex {
 
             ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOMOVE);
         } else {
-            s_oldWndProc = ::SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)commonWindowProc);
+            s_oldWndProc = ::SetWindowLongPtr(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(commonWindowProc));
         }
 
         // Set up a taskbar progress handler
@@ -514,31 +597,86 @@ namespace hex {
             if (user32Dll != nullptr) {
                 using SetWindowCompositionAttributeFunc = BOOL(WINAPI*)(HWND, WINCOMPATTRDATA*);
 
-                const auto SetWindowCompositionAttribute =
-                        (SetWindowCompositionAttributeFunc)
-                        (void*)
-                        GetProcAddress(user32Dll.get(), "SetWindowCompositionAttribute");
+                const auto setWindowCompositionAttribute =
+                    reinterpret_cast<SetWindowCompositionAttributeFunc>(
+                        reinterpret_cast<void*>(
+                            GetProcAddress(user32Dll.get(), "SetWindowCompositionAttribute")
+                        )
+                    );
 
-                if (SetWindowCompositionAttribute != nullptr) {
+                if (setWindowCompositionAttribute != nullptr) {
                     ACCENTPOLICY policy = { ImGuiExt::GetCustomStyle().WindowBlur > 0.5F ? 4U : 0U, 0, ImGuiExt::GetCustomColorU32(ImGuiCustomCol_BlurBackground), 0 };
                     WINCOMPATTRDATA data = { 19, &policy, sizeof(ACCENTPOLICY) };
-                    SetWindowCompositionAttribute(hwnd, &data);
+                    setWindowCompositionAttribute(hwnd, &data);
                 }
             }
         });
+        RequestChangeTheme::subscribe([this](const std::string &theme) {
+            auto hwnd = glfwGetWin32Window(m_window);
+
+            BOOL value = theme == "Dark" ? TRUE : FALSE;
+            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &value, sizeof(value));
+        });
 
         ImGui::GetIO().ConfigDebugIsDebuggerPresent = ::IsDebuggerPresent();
+
+        glfwSetFramebufferSizeCallback(m_window, [](GLFWwindow* window, int width, int height) {
+            auto *win = static_cast<Window *>(glfwGetWindowUserPointer(window));
+            win->m_unlockFrameRate = true;
+
+            glViewport(0, 0, width, height);
+            ImHexApi::System::impl::setMainWindowSize(width, height);
+        });
+
+        DwmEnableMMCSS(TRUE);
+        
+        {
+            constexpr BOOL value = TRUE;
+            DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_ENABLED, &value, sizeof(value));
+        }
+        {
+            constexpr DWMNCRENDERINGPOLICY value = DWMNCRP_ENABLED;
+            DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &value, sizeof(value));
+        }
+
+        glfwSetWindowRefreshCallback(m_window, [](GLFWwindow *window) {
+            auto win = static_cast<Window *>(glfwGetWindowUserPointer(window));
+
+            win->fullFrame();
+            DwmFlush();
+        });
+
+        // AMD GPUs seem to have issues with Layered Window rendering. Until we figure out
+        // why that is or AMD fixes the issue on their side, disable it on these GPUs.
+        s_useLayeredWindow = ImHexApi::System::getGPUVendor() != "ATI Technologies Inc.";
     }
 
     void Window::beginNativeWindowFrame() {
-        s_titleBarHeight = ImGui::GetCurrentWindowRead()->MenuBarHeight();
+        s_titleBarHeight = ImGui::GetCurrentWindowRead()->MenuBarHeight;
 
         // Remove WS_POPUP style from the window to make various window management tools work
         auto hwnd = glfwGetWin32Window(m_window);
-        ::SetWindowLong(hwnd, GWL_STYLE, (GetWindowLong(hwnd, GWL_STYLE) | WS_OVERLAPPEDWINDOW) & ~WS_POPUP);
+        {
+            auto style = GetWindowLong(hwnd, GWL_STYLE);
+            style |= WS_OVERLAPPEDWINDOW;
+            style &= ~WS_POPUP;
+
+            ::SetWindowLong(hwnd, GWL_STYLE, style);
+        }
+
+        // Make window composited and layered when supported to eradicate any window flickering that happens while resizing
+        {
+            auto style = GetWindowLong(hwnd, GWL_EXSTYLE);
+            style |= WS_EX_COMPOSITED;
+
+            if (s_useLayeredWindow)
+                style |= WS_EX_LAYERED;
+
+            ::SetWindowLong(hwnd, GWL_EXSTYLE, style);
+        }
 
         if (!ImHexApi::System::impl::isWindowResizable()) {
-            if (glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED)) {
+            if (glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED) == GLFW_TRUE) {
                 glfwRestoreWindow(m_window);
             }
         }
@@ -546,8 +684,7 @@ namespace hex {
     }
 
     void Window::endNativeWindowFrame() {
-        if (!ImHexApi::System::isBorderlessWindowModeEnabled())
-            return;
+
     }
 
 }

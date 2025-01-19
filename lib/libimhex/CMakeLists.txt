@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 project(libimhex)
 
 set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_SHARED_LIBRARY_PREFIX "")
 
 set(LIBIMHEX_SOURCES
         source/api/imhex_api.cpp
@@ -37,6 +36,9 @@ set(LIBIMHEX_SOURCES
         source/helpers/logger.cpp
         source/helpers/tar.cpp
         source/helpers/debugging.cpp
+        source/helpers/default_paths.cpp
+        source/helpers/imgui_hooks.cpp
+        source/helpers/semantic_version.cpp
 
         source/test/tests.cpp
 
@@ -48,6 +50,7 @@ set(LIBIMHEX_SOURCES
         source/ui/view.cpp
         source/ui/popup.cpp
         source/ui/toast.cpp
+        source/ui/banner.cpp
 
         source/subcommands/subcommands.cpp
 )
@@ -124,7 +127,7 @@ target_link_directories(libimhex ${LIBIMHEX_LIBRARY_TYPE} ${MBEDTLS_LIBRARY_DIR}
 
 if (NOT EMSCRIPTEN)
     # curl is only used in non-emscripten builds
-    target_link_libraries(libimhex ${LIBIMHEX_LIBRARY_TYPE} ${CURL_LIBRARIES})
+    target_link_libraries(libimhex ${LIBIMHEX_LIBRARY_TYPE} CURL::libcurl)
 endif()
 
 
@@ -132,19 +135,24 @@ if (NOT IMHEX_EXTERNAL_PLUGIN_BUILD)
     if (WIN32)
         set_target_properties(libimhex PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
         target_link_options(libimhex PRIVATE -Wl,--export-all-symbols)
+        target_link_libraries(libimhex PRIVATE Netapi32.lib)
     elseif (APPLE)
         find_library(FOUNDATION NAMES Foundation)
         target_link_libraries(libimhex PUBLIC ${FOUNDATION})
     endif ()
 
-    target_link_libraries(libimhex PRIVATE microtar libwolv ${NFD_LIBRARIES} magic dl ${JTHREAD_LIBRARIES})
-    target_link_libraries(libimhex PUBLIC libpl ${IMGUI_LIBRARIES})
+    target_link_libraries(libimhex PRIVATE microtar libwolv ${NFD_LIBRARIES} magic dl)
+    target_link_libraries(libimhex PUBLIC libpl ${IMGUI_LIBRARIES} ${JTHREAD_LIBRARIES})
 
     precompileHeaders(libimhex "${CMAKE_CURRENT_SOURCE_DIR}/include")
 endif()
 
-target_link_libraries(libimhex ${LIBIMHEX_LIBRARY_TYPE} ${NLOHMANN_JSON_LIBRARIES} imgui_all_includes ${MBEDTLS_LIBRARIES} ${FMT_LIBRARIES})
+target_link_libraries(libimhex ${LIBIMHEX_LIBRARY_TYPE} ${NLOHMANN_JSON_LIBRARIES} imgui_all_includes ${MBEDTLS_LIBRARIES} ${FMT_LIBRARIES} ${LUNASVG_LIBRARIES} ${BOOST_LIBRARIES})
 
 set_property(TARGET libimhex PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
 
 add_dependencies(imhex_all libimhex)
+
+install(FILES "$<TARGET_FILE:libimhex>" DESTINATION "${CMAKE_INSTALL_LIBDIR}" PERMISSIONS ${LIBRARY_PERMISSIONS})
+set_target_properties(libimhex PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+set_target_properties(libimhex PROPERTIES PREFIX "")

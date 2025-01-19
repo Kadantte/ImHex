@@ -76,13 +76,20 @@ namespace ImGuiExt {
         };
 
         Texture() = default;
-        Texture(const ImU8 *buffer, int size, Filter filter = Filter::Nearest, int width = 0, int height = 0);
-        Texture(std::span<const std::byte> bytes, Filter filter = Filter::Nearest, int width = 0, int height = 0);
-        explicit Texture(const char *path, Filter filter = Filter::Nearest);
-        explicit Texture(const std::fs::path &path, Filter filter = Filter::Nearest);
-        Texture(unsigned int texture, int width, int height);
         Texture(const Texture&) = delete;
         Texture(Texture&& other) noexcept;
+
+         [[nodiscard]] static Texture fromImage(const ImU8 *buffer, int size, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(std::span<const std::byte> buffer, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(const char *path, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromImage(const std::fs::path &path, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromGLTexture(unsigned int texture, int width, int height);
+         [[nodiscard]] static Texture fromBitmap(const ImU8 *buffer, int size, int width, int height, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromBitmap(std::span<const std::byte> buffer, int width, int height, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromSVG(const char *path, int width = 0, int height = 0, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromSVG(const std::fs::path &path, int width = 0, int height = 0, Filter filter = Filter::Nearest);
+         [[nodiscard]] static Texture fromSVG(std::span<const std::byte> buffer, int width = 0, int height = 0, Filter filter = Filter::Nearest);
+
 
         ~Texture();
 
@@ -90,31 +97,29 @@ namespace ImGuiExt {
         Texture& operator=(Texture&& other) noexcept;
 
         [[nodiscard]] constexpr bool isValid() const noexcept {
-            return m_textureId != nullptr;
+            return m_textureId != 0;
         }
 
         [[nodiscard]] operator ImTextureID() const noexcept {
             return m_textureId;
         }
 
-        [[nodiscard]] operator intptr_t() const noexcept {
-            return reinterpret_cast<intptr_t>(m_textureId);
-        }
-
-        [[nodiscard]] auto getSize() const noexcept {
+        [[nodiscard]] ImVec2 getSize() const noexcept {
             return ImVec2(m_width, m_height);
         }
 
-        [[nodiscard]] constexpr auto getAspectRatio() const noexcept {
+        [[nodiscard]] constexpr float getAspectRatio() const noexcept {
             if (m_height == 0) return 1.0F;
 
             return float(m_width) / float(m_height);
         }
 
     private:
-        ImTextureID m_textureId = nullptr;
+        ImTextureID m_textureId = 0;
         int m_width = 0, m_height = 0;
     };
+
+    float GetTextWrapPos();
 
     int UpdateStringSizeCallback(ImGuiInputTextCallbackData *data);
 
@@ -124,9 +129,11 @@ namespace ImGuiExt {
     bool DescriptionButton(const char *label, const char *description, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
     bool DescriptionButtonProgress(const char *label, const char *description, float fraction, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
 
-    void HelpHover(const char *text);
+    void HelpHover(const char *text, const char *icon = "(?)", ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_ButtonActive));
 
     void UnderlinedText(const char *label, ImColor color = ImGui::GetStyleColorVec4(ImGuiCol_Text), const ImVec2 &size_arg = ImVec2(0, 0));
+
+    void UnderwavedText(const char *label, ImColor textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text), ImColor lineColor = ImGui::GetStyleColorVec4(ImGuiCol_Text), const ImVec2 &size_arg = ImVec2(0, 0));
 
     void TextSpinner(const char *label);
 
@@ -137,11 +144,13 @@ namespace ImGuiExt {
 
     bool TitleBarButton(const char *label, ImVec2 size_arg);
     bool ToolBarButton(const char *symbol, ImVec4 color);
-    bool IconButton(const char *symbol, ImVec4 color, ImVec2 size_arg = ImVec2(0, 0));
+    bool IconButton(const char *symbol, ImVec4 color, ImVec2 size_arg = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
 
     bool InputIntegerPrefix(const char* label, const char *prefix, void *value, ImGuiDataType type, const char *format, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputHexadecimal(const char* label, u32 *value, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputHexadecimal(const char* label, u64 *value, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
+
+    bool SliderBytes(const char *label, u64 *value, u64 min, u64 max, u64 stepSize = 1, ImGuiSliderFlags flags = ImGuiSliderFlags_None);
 
     inline bool HasSecondPassed() {
         return static_cast<ImU32>(ImGui::GetTime() * 100) % 100 <= static_cast<ImU32>(ImGui::GetIO().DeltaTime * 100);
@@ -154,6 +163,7 @@ namespace ImGuiExt {
 
         struct Styles {
             float WindowBlur = 0.0F;
+            float PopupWindowAlpha = 0.0F; // Alpha used by Popup tool windows when the user is not hovering over them
         } styles;
     };
 
@@ -175,11 +185,16 @@ namespace ImGuiExt {
 
     void SmallProgressBar(float fraction, float yOffset = 0.0F);
 
-    inline void TextFormatted(const std::string &fmt, auto &&...args) {
-        ImGui::TextUnformatted(hex::format(fmt, std::forward<decltype(args)>(args)...).c_str());
+    inline void TextFormatted(std::string_view fmt, auto &&...args) {
+        if constexpr (sizeof...(args) == 0) {
+            ImGui::TextUnformatted(fmt.data(), fmt.data() + fmt.size());
+        } else {
+            const auto string = hex::format(fmt, std::forward<decltype(args)>(args)...);
+            ImGui::TextUnformatted(string.c_str(), string.c_str() + string.size());
+        }
     }
 
-    inline void TextFormattedSelectable(const std::string &fmt, auto &&...args) {
+    inline void TextFormattedSelectable(std::string_view fmt, auto &&...args) {
         auto text = hex::format(fmt, std::forward<decltype(args)>(args)...);
 
         ImGui::PushID(text.c_str());
@@ -187,8 +202,8 @@ namespace ImGuiExt {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2());
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 
-        ImGui::PushItemWidth(-FLT_MIN);
-        ImGui::InputText("##", const_cast<char *>(text.c_str()), text.size(), ImGuiInputTextFlags_ReadOnly);
+        ImGui::PushItemWidth(ImGui::CalcTextSize(text.c_str()).x + ImGui::GetStyle().FramePadding.x * 2);
+        ImGui::InputText("##", const_cast<char *>(text.c_str()), text.size() + 1, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
         ImGui::PopItemWidth();
 
         ImGui::PopStyleColor();
@@ -197,37 +212,48 @@ namespace ImGuiExt {
         ImGui::PopID();
     }
 
-    inline void TextFormattedColored(ImColor color, const std::string &fmt, auto &&...args) {
-        ImGui::TextColored(color, "%s", hex::format(fmt, std::forward<decltype(args)>(args)...).c_str());
+    inline void TextFormattedColored(ImColor color, std::string_view fmt, auto &&...args) {
+        ImGui::PushStyleColor(ImGuiCol_Text, color.Value);
+        ImGuiExt::TextFormatted(fmt, std::forward<decltype(args)>(args)...);
+        ImGui::PopStyleColor();
     }
 
-    inline void TextFormattedDisabled(const std::string &fmt, auto &&...args) {
-        ImGui::TextDisabled("%s", hex::format(fmt, std::forward<decltype(args)>(args)...).c_str());
+    inline void TextFormattedDisabled(std::string_view fmt, auto &&...args) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+        ImGuiExt::TextFormatted(fmt, std::forward<decltype(args)>(args)...);
+        ImGui::PopStyleColor();
     }
 
-    inline void TextFormattedWrapped(const std::string &fmt, auto &&...args) {
-        ImGui::TextWrapped("%s", hex::format(fmt, std::forward<decltype(args)>(args)...).c_str());
+    inline void TextFormattedWrapped(std::string_view fmt, auto &&...args) {
+        const bool need_backup = ImGuiExt::GetTextWrapPos() < 0.0F;  // Keep existing wrap position if one is already set
+        if (need_backup)
+            ImGui::PushTextWrapPos(0.0F);
+        ImGuiExt::TextFormatted(fmt, std::forward<decltype(args)>(args)...);
+        if (need_backup)
+            ImGui::PopTextWrapPos();
     }
 
-    inline void TextFormattedWrappedSelectable(const std::string &fmt, auto &&...args) {
+    inline void TextFormattedWrappedSelectable(std::string_view fmt, auto &&...args) {
         // Manually wrap text, using the letter M (generally the widest character in non-monospaced fonts) to calculate the character width to use.
-        auto text = wolv::util::wrapMonospacedString(
+        auto text = wolv::util::trim(wolv::util::wrapMonospacedString(
                 hex::format(fmt, std::forward<decltype(args)>(args)...),
                 ImGui::CalcTextSize("M").x,
                 ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - ImGui::GetStyle().FrameBorderSize
-        );
+        ));
+
+        auto textSize = ImGui::CalcTextSize(text.c_str());
 
         ImGui::PushID(text.c_str());
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2());
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 
-        ImGui::PushItemWidth(-FLT_MIN);
+        ImGui::PushItemWidth(ImGui::CalcTextSize(text.c_str()).x + ImGui::GetStyle().FramePadding.x * 2);
         ImGui::InputTextMultiline(
                 "##",
                 const_cast<char *>(text.c_str()),
-                text.size(),
-                ImVec2(0, -FLT_MIN),
+                text.size() + 1,
+                ImVec2(0, textSize.y),
                 ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll
         );
         ImGui::PopItemWidth();
@@ -239,13 +265,13 @@ namespace ImGuiExt {
     }
 
     void TextUnformattedCentered(const char *text);
-    inline void TextFormattedCentered(const std::string &fmt, auto &&...args) {
+    inline void TextFormattedCentered(std::string_view fmt, auto &&...args) {
         auto text = hex::format(fmt, std::forward<decltype(args)>(args)...);
         TextUnformattedCentered(text.c_str());
     }
 
 
-    inline void TextFormattedCenteredHorizontal(const std::string &fmt, auto &&...args) {
+    inline void TextFormattedCenteredHorizontal(std::string_view fmt, auto &&...args) {
         auto text = hex::format(fmt, std::forward<decltype(args)>(args)...);
         auto availableSpace = ImGui::GetContentRegionAvail();
         auto textSize = ImGui::CalcTextSize(text.c_str(), nullptr, false, availableSpace.x * 0.75F);
@@ -258,6 +284,7 @@ namespace ImGuiExt {
     }
 
     bool InputTextIcon(const char* label, const char *icon, std::string &buffer, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
+    bool InputTextIconHint(const char* label, const char *icon, const char *hint, std::string &buffer, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
 
     bool InputScalarCallback(const char* label, ImGuiDataType data_type, void* p_data, const char* format, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data);
 
@@ -266,17 +293,17 @@ namespace ImGuiExt {
     bool BitCheckbox(const char* label, bool* v);
 
     bool DimmedButton(const char* label, ImVec2 size = ImVec2(0, 0));
-    bool DimmedIconButton(const char *symbol, ImVec4 color, ImVec2 size = ImVec2(0, 0));
-    bool DimmedButtonToggle(const char *icon, bool *v, ImVec2 size);
+    bool DimmedIconButton(const char *symbol, ImVec4 color, ImVec2 size = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
+    bool DimmedButtonToggle(const char *icon, bool *v, ImVec2 size = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
     bool DimmedIconToggle(const char *icon, bool *v);
     bool DimmedIconToggle(const char *iconOn, const char *iconOff, bool *v);
 
-    void TextOverlay(const char *text, ImVec2 pos);
+    void TextOverlay(const char *text, ImVec2 pos, float maxWidth = -1);
 
     bool BeginBox();
     void EndBox();
 
-    void BeginSubWindow(const char *label, ImVec2 size = ImVec2(0, 0), ImGuiChildFlags flags = ImGuiChildFlags_None);
+    bool BeginSubWindow(const char *label, bool *collapsed = nullptr, ImVec2 size = ImVec2(0, 0), ImGuiChildFlags flags = ImGuiChildFlags_None);
     void EndSubWindow();
 
     void ConfirmButtons(const char *textLeft, const char *textRight, const auto &leftButtonCallback, const auto &rightButtonCallback) {
@@ -296,6 +323,9 @@ namespace ImGuiExt {
 
     bool ToggleSwitch(const char *label, bool *v);
     bool ToggleSwitch(const char *label, bool v);
+
+    bool PopupTitleBarButton(const char* label, bool p_enabled);
+    void PopupTitleBarText(const char* text);
 
     template<typename T>
     constexpr ImGuiDataType getImGuiDataType() {

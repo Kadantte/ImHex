@@ -14,15 +14,13 @@
 
 namespace hex::plugin::visualizers {
 
-    void drawTimestampVisualizer(pl::ptrn::Pattern &, pl::ptrn::IIterable &, bool, std::span<const pl::core::Token::Literal> arguments) {
+    void drawTimestampVisualizer(pl::ptrn::Pattern &, bool, std::span<const pl::core::Token::Literal> arguments) {
         time_t timestamp = arguments[0].toUnsigned();
         auto tm = fmt::gmtime(timestamp);
         auto date = std::chrono::year_month_day(std::chrono::year(tm.tm_year + 1900), std::chrono::month(tm.tm_mon + 1), std::chrono::day(tm.tm_mday));
 
         auto lastMonthDay = std::chrono::year_month_day_last(date.year(), date.month() / std::chrono::last);
         auto firstWeekDay = std::chrono::weekday(std::chrono::year_month_day(date.year(), date.month(), std::chrono::day(1)));
-
-        const auto scale = 1_scaled * (ImHexApi::Fonts::getFontSize() / ImHexApi::Fonts::DefaultFontSize);
 
         // Draw calendar
         if (ImGui::BeginTable("##month_table", 2)) {
@@ -32,7 +30,7 @@ namespace hex::plugin::visualizers {
             // Draw centered month name and year
             ImGuiExt::TextFormattedCenteredHorizontal("{:%B %Y}", tm);
 
-            if (ImGui::BeginTable("##days_table", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_NoHostExtendX, ImVec2(160, 120) * scale)) {
+            if (ImGui::BeginTable("##days_table", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_NoHostExtendX, scaled(ImVec2(160, 120)))) {
                 constexpr static auto ColumnFlags = ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoReorder | ImGuiTableColumnFlags_NoHide;
                 ImGui::TableSetupColumn("M", ColumnFlags);
                 ImGui::TableSetupColumn("T", ColumnFlags);
@@ -47,11 +45,11 @@ namespace hex::plugin::visualizers {
                 ImGui::TableNextRow();
 
                 // Skip days before the first day of the month
-                for (u8 i = 0; i < firstWeekDay.c_encoding() - 1; ++i)
+                for (u32 i = 0; i < firstWeekDay.c_encoding() - 1; ++i)
                     ImGui::TableNextColumn();
 
                 // Draw days
-                for (u8 i = 1; i <= u32(lastMonthDay.day()); ++i) {
+                for (u32 i = 1; i <= u32(lastMonthDay.day()); ++i) {
                     ImGui::TableNextColumn();
                     ImGuiExt::TextFormatted("{:02}", i);
 
@@ -68,7 +66,7 @@ namespace hex::plugin::visualizers {
             ImGui::TableNextColumn();
 
             // Draw analog clock
-            const auto size = ImVec2(120, 120) * scale;
+            const auto size = scaled(ImVec2(120, 120));
             if (ImGui::BeginChild("##clock", size + ImVec2(0, ImGui::GetTextLineHeightWithSpacing()))) {
                 // Draw centered digital hour, minute and seconds
                 ImGuiExt::TextFormattedCenteredHorizontal("{:%H:%M:%S}", tm);
